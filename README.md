@@ -20,13 +20,13 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
    它们覆盖了绝大多数任务的第一个动作，所以通常不存在「首次工具调用」的额外成本。
 2. **长尾收窄**：插件为每个 agent 调一次 `ctx.tools.restrict({ allow: ['toolbox', ...eager] })`，
    这是注册表自带的按 agent 收窄接口，提示装配、会话回放与 UI 呈现都保持一致。
-3. **目录带签名**：`{action:"list"}` 给出 `read(path, offset?)` 这样的**参数签名**，不只是散文描述。
-   签名通常已经够直接调用，`{action:"schema"}` 只留给签名不够的场合。
+3. **目录带签名**：`{action:"list"}` 给出 `read(path:str, offset?:int)` 这样的**带类型参数签名**，不只是散文描述。
+   短枚举直接写在签名里（`action:"list|call"`），签名通常已经够直接调用，`{action:"schema"}` 只留给签名不够的场合。
 4. **不绕过策略**：`{action:"call"}` 通过插件自己的 `ToolExecutionPipeline` 重放调用，
    审批、guard、超时、post-execute 策略与结果渲染全部照常生效。
 
-5. **失败即带 schema**：`call` 被拒时，答案里附上该工具的参数表（超过 3000 字符就不附），
-   模型在同一轮里改正重试。
+5. **失败即带 schema**：`call` 被拒时，答案里附上该工具的参数表；参数表超过 3000 字符时不再展开，
+   而是给出 `{action:"schema", tools:[...]}` 指针，避免模型盲目重试。
 6. **未知工具给近似项**：拼错时返回最接近的三个名字，而不是让模型回到 `list` 从头找。
 
 ## 稳定性取舍
@@ -41,6 +41,22 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
 
 短会话（1–2 轮）里本插件未必划算：工具箱自身约 400 token，要摊到后续请求上才回本。
 工具多的长期会话才是目标场景。
+
+## 0.3.1 可靠性修复
+
+0.3.0 的冻结工作集不变，这一版只修「会算错、会卡住、会给出半截答案」的地方：
+
+- **预算按 token 计**：`catalogTokenBudget` 现在就是估计 token（CJK 一字≈1 token，其余 0.25）。
+  旧实现把 1200 当字符再 ×4 折算，中文目录实际会被低估约 4 倍；现在 1200 真的落在 1200 token 以内。
+- **签名整字段截断**：超过 160 字符时整个参数丢弃并标 `…`，不会出现半个参数名；支持 JSON Schema
+  包装形状，并把类型与短枚举写进签名（字符串枚举带引号，数字/布尔枚举保留类型）。
+- **技能发现 2 秒上限**：技能服务不回答时 `list` 照常返回，并明确写「超时」，而不是伪装成「没有技能」。
+- **工具目录与技能目录共享一个预算**：`catalogTokenBudget` 是整次 `list` 的上限，表头与提示先预留，
+  技能目录只拿剩余额度，避免两份目录各自花满 1200。
+- **schema 答案保持完整 JSON**：单块放不下就点名剩下哪些工具，另起一次 `schema` 取；不再截到 JSON 中间。
+- **等待期间不串代次**：`list` 在 `await` 技能目录后若注册表已变化，会按新代次重建行，不会旧签名配新计数。
+- **参数容错**：`call` 接受带空白的工具名，以及以 JSON 字符串传入的 `arguments`。
+- **withheld 数字按每条 schema 计量**：表头的中文低估一并消失。
 
 ## 安装
 
@@ -69,7 +85,7 @@ pnpm add link:<本目录绝对路径>
       - todo_write
     # eager: false              # 全部收进工具箱，只留工具箱一张 schema
     catalogDescriptionChars: 96  # 目录每行摘要长度
-    catalogTokenBudget: 1200     # 一次 list 的 token 预算；超了自动降级
+    catalogTokenBudget: 1200     # 一次 list 的估计 token 上限（CJK 感知）；超了自动降级
     hideOthers: true             # false = 只加工具箱、不收窄视图
     skills: true                 # 目录里是否包含技能，并开放 skill 动作
 ```
@@ -103,7 +119,9 @@ pnpm add link:<本目录绝对路径>
 ## 开发
 
 ```bash
-bun test tests/      # 23 个用例：目录格式化 + 装配/收窄/分发/自纠错
+bun test tests/                     # 34 个用例：目录格式化 + 装配/收窄/分发/自纠错
+node scripts/measure-first-call.mjs # 40 工具模拟 profile：常驻/目录/窄查询的 token 实测
 ```
 
 `lib/catalog.js` 是零依赖的纯函数，`lib/index.js` 只负责服务接线。
+`.github/workflows/tests.yml` 在 push 到 `main` 和每个 PR 上跑语法检查、测试与测量。

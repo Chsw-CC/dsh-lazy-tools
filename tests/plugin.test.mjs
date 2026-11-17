@@ -160,8 +160,8 @@ test('list carries parameter signatures, so a call rarely needs schema', async (
   const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
   assert.equal(result.ok, true)
   assert.ok(result.text.startsWith('Tools (3, about'), 'the header reports the withheld budget')
-  assert.ok(result.text.includes('- read(path, offset?) — Read a text file'), result.text)
-  assert.ok(result.text.includes('- bash(command)'), 'a required parameter carries no marker')
+  assert.ok(result.text.includes('- read(path:str, offset?:int) — Read a text file'), result.text)
+  assert.ok(result.text.includes('- bash(command:str)'), 'a required parameter carries a type but no marker')
   assert.ok(!result.text.includes('- toolbox'))
 })
 
@@ -271,4 +271,67 @@ test('a tool that calls back into the toolbox hits the nesting guard', async () 
   } finally {
     delete globalThis.__reenter
   }
+})
+
+// --- robustness of the call and listing paths -------------------------------
+
+test('call accepts an argument object sent as a JSON string', async () => {
+  const toolbox = mount()
+  prepared.length = 0
+  const result = await toolbox.execute(
+    { action: 'call', tool: ' read ', arguments: '{"path":"a"}' },
+    makeExec(undefined),
+  )
+  assert.equal(result.ok, true)
+  assert.equal(prepared[0].name, 'read', 'surrounding whitespace does not change the tool')
+  assert.equal(prepared[0].arguments, JSON.stringify({ path: 'a' }), 'the JSON string is parsed into the declared object')
+})
+
+test('an oversized schema answer stays parseable and names what did not fit', async () => {
+  const big = { name: 'big_tool', description: 'A tool with a very large parameter tree.', parameters: {} }
+  for (let index = 0; index < 300; index++) {
+    big.parameters['param_' + index] = { type: 'string', description: 'x'.repeat(200) }
+  }
+  definitions = [big, { name: 'small_tool', description: 'A small tool.', parameters: { path: { type: 'string' } } }, { name: 'toolbox' }]
+  registered.length = 0
+  apply(makeContext(), {})
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'schema', tools: ['big_tool', 'small_tool'] }, makeExec(undefined))
+  assert.ok(result.text.includes('"param_299"'), 'the first schema is complete, never cut mid-JSON')
+  assert.ok(result.text.includes('did not fit one answer'), 'the deferred schema is named')
+  assert.equal(result.text.includes('"name": "small_tool"'), false, 'and it is not half-rendered')
+})
+
+test('a hanging skill provider is reported instead of blocking the listing', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'skills' ? { list: () => new Promise(() => {}) } : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const toolbox = registered.at(-1)
+  const started = Date.now()
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  const elapsed = Date.now() - started
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('no answer within 2s'), result.text)
+  assert.ok(elapsed >= 1900, 'the deadline really elapsed, so the bound is exercised')
+  assert.ok(elapsed < 5000, 'and the listing still returns promptly after it')
+})
+
+test('the tool and skill catalogs share one token budget', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'skills'
+    ? { list: async () => Array.from({ length: 30 }, (_, index) => ({ name: 'skill_' + index, description: 'A skill.' })) }
+    : undefined)
+  definitions = []
+  for (let index = 0; index < 30; index++) {
+    definitions.push({ name: 'tool_' + index, description: 'A deferred tool used to fill the listing budget completely.', parameters: { path: { type: 'string' } } })
+  }
+  definitions.push({ name: 'toolbox' })
+  registered.length = 0
+  apply(ctx, { catalogTokenBudget: 120 })
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  const skills = result.text.split('Skills (')[1] ?? ''
+  assert.ok(skills.startsWith('30):'), 'the skills section is present and counted: ' + result.text)
+  assert.equal(skills.includes('skill_0'), false, 'no skill row is rendered past the shared budget')
 })

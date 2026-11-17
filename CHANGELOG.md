@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.1
+
+Reliability pass over 0.3.0's frozen surface: no new visible state, only measurements and
+answers that were wrong or unhelpful.
+
+- **The listing budget is measured in tokens.** `catalogTokenBudget` used to be read as characters
+  and multiplied by four, which priced a Chinese catalog at about a quarter of its real size.
+  The estimator now counts one token per CJK character and a quarter per other character, so the
+  configured 1200 means 1200 tokens in both languages.
+- **Signatures keep whole parameters and carry types.** `read(path:str, offset?:int)`, with a short
+  enum inlined when there is one. String enums stay quoted; numeric and boolean enums keep their
+  declared type (`retries:int:1|2`), because `"1|2"` would read as strings. A signature over 160
+  characters drops whole parameters and ends with `…` instead of cutting a name in half. JSON
+  Schema wrappers are read too.
+- **Skill discovery has a 2-second deadline.** A provider that never answers no longer holds the
+  first listing hostage; the answer says the catalog was unavailable instead of pretending the
+  session has no skills.
+- **One budget covers both catalogs.** The tool and skill listings no longer each receive the full
+  `catalogTokenBudget`; headers and notes are reserved, and the skills catalog gets what is left.
+- **`schema` never splits a JSON block.** Blocks that do not fit one answer are named in a trailing
+  note, to be fetched in a second call.
+- **A listing cannot mix registry generations.** If the registry changes while skill discovery is
+  awaited, the rows are re-rendered before the answer is assembled.
+- **`call` tolerates two common shapes:** a tool name with surrounding whitespace, and an
+  `arguments` object sent as a JSON string.
+- **The withheld-token header is priced per schema**, so the saving it reports for Chinese
+  profiles is no longer understated fourfold.
+
+Compatible at the API level; `catalogTokenBudget` keeps its name but its unit is now tokens
+(previously characters × 4). 34 tests; CI runs the suite plus the first-call measurement.
+
 ## 0.3.0
 
 Stability first: the visible tool surface is frozen instead of being tuned per step.
