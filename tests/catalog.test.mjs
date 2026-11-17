@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildCatalog, buildTieredCatalog, matchesPattern, matchesQuery, summarize } from '../lib/catalog.js'
+import { buildCatalog, buildTieredCatalog, estimateTokens, matchesPattern, matchesQuery, parameterSignature, summarize } from '../lib/catalog.js'
 
 test('summarize collapses whitespace and clips long text', () => {
   assert.equal(summarize('  a\n  b\t c  ', 40), 'a b c')
@@ -82,3 +82,54 @@ test('buildTieredCatalog degrades the listing instead of overrunning the budget'
   }
 })
 
+
+// --- tokens, signatures, and the budget unit --------------------------------
+
+test('estimateTokens counts CJK characters as tokens, not quarters', () => {
+  assert.equal(estimateTokens('abcd'), 1)
+  assert.equal(estimateTokens('中文段落'), 4)
+  assert.ok(estimateTokens('中文段落') > '中文段落'.length / 4)
+})
+
+test('parameterSignature renders names with types and enums', () => {
+  const parameters = {
+    action: { type: 'string', required: true, enum: ['list', 'call'] },
+    path: { type: 'string' },
+    limit: { type: 'number' },
+  }
+  assert.equal(parameterSignature(parameters), 'action:"list|call", path?:str, limit?:num')
+})
+
+test('parameterSignature keeps parameters named like schema keywords', () => {
+  const parameters = {
+    path: { type: 'string', required: true },
+    pattern: { type: 'string', required: true },
+    format: { type: 'string' },
+  }
+  assert.equal(parameterSignature(parameters), 'path:str, pattern:str, format?:str')
+})
+
+test('parameterSignature reads a JSON Schema wrapper and drops whole fields', () => {
+  const wrapped = {
+    type: 'object',
+    properties: {
+      first_parameter_name: { type: 'string' },
+      second_parameter_name: { type: 'string' },
+    },
+    required: ['first_parameter_name'],
+  }
+  assert.equal(parameterSignature(wrapped), 'first_parameter_name:str, second_parameter_name?:str')
+  const clipped = parameterSignature(wrapped, 24)
+  assert.equal(clipped, 'first_parameter_name:str, …')
+  assert.ok(!clipped.includes('second_parameter_nam…'), 'a name is never cut in half')
+})
+
+test('a token budget is spent in tokens, not characters', () => {
+  const chinese = []
+  for (let index = 0; index < 30; index++) {
+    chinese.push({ name: 'tool_' + index, description: '这是一个比较长的中文工具说明，用来验证预算按 token 计算而不是按字符数计算。' })
+  }
+  const budgeted = buildTieredCatalog(chinese, { budgetTokens: 200 })
+  assert.ok(budgeted.tier >= 2, 'the Chinese catalog does not fit tier 1 in 200 tokens')
+  assert.ok(estimateTokens(budgeted.text) <= 200, 'and the rendered tier really fits the token budget')
+})
