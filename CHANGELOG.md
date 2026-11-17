@@ -16,8 +16,8 @@ is `run_code` joining the eager set in PTC compositions that provide it.
   96-character rendered summary, so a tool whose description mentioned the query past
   that budget was reported as missing even though it existed.
 - **JSON Schema wrappers without `type:"object"` are parsed.** `properties` plus
-  `required` alone is enough for a signature; a real parameter named `properties` is
-  still treated as a parameter, not a wrapper.
+  `required` alone is enough for a signature; wrapper metadata such as `$id` is preserved,
+  while a real parameter named `properties` is still treated as a parameter, not a wrapper.
 - **Signatures are projected once per registry generation.** A repeated `list` reuses
   the rows instead of re-projecting every schema; cached `schema` blocks are cleared on
   `tools/change`, so an in-place definition update cannot answer with a stale block.
@@ -32,7 +32,7 @@ is `run_code` joining the eager set in PTC compositions that provide it.
 - **The token estimator includes Hangul**, so Korean catalogs are no longer priced as
   ASCII.
 
-48 tests; CI runs the suite plus the first-call measurement.
+50 tests; CI runs the suite plus the first-call measurement.
 
 ## 0.3.1
 

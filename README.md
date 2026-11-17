@@ -50,7 +50,7 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
 - **`skills: false` 真正关闭技能**：以前只隐藏目录，`skill` 动作仍能加载正文；现在动作明确拒绝，系统提示里的技能行也一并省略。
 - **PTC 组合下的 `run_code` 常驻**：默认工作集补上 `run_code`，有该工具的 PTC 组合不再先绕一次工具箱；没有该名字的部署自动跳过。
 - **`list` 的 query 检索完整描述**：以前只匹配 96 字符的显示摘要，描述后半段命中的工具会被误报为不存在。
-- **无 `type:"object"` 的 JSON Schema 包装**：只有 `properties` + `required` 也能正确读出签名；真正的 `properties` 参数不会被误判成包装。
+- **无 `type:"object"` 的 JSON Schema 包装**：只有 `properties` + `required` 也能正确读出签名，`$id` 等包装元数据不再导致误判；真正的 `properties` 参数不会被当成包装。
 - **签名按注册表代次缓存**：重复 `list` 不再为每个工具重新投影 schema；`tools/change` 会清空 `schema` 块缓存，原地改定义也不会返回旧块。
 - **`plugins` 只有一份总预算**：四个方法 × 三个服务不再各自等 1.5 秒（最坏约 18 秒）；超时即停、拒绝换下一个方法、非数组形状继续探测而不是误报 0 个插件。
 - **输入容错**：非字符串 `query` 不再让目录崩溃；`schema` 会去空白、去重、忽略非字符串名字；空白 `tool` 在查找前拒绝；分组标签保留分隔符（`mcp_*` 与 `mcp.*` 不再合并）。
@@ -134,7 +134,7 @@ pnpm add link:<本目录绝对路径>
 ## 开发
 
 ```bash
-bun test tests/                     # 48 个用例：目录格式化 + 装配/收窄/分发/自纠错
+bun test tests/                     # 50 个用例：目录格式化 + 装配/收窄/分发/自纠错
 node scripts/measure-first-call.mjs # 40 工具模拟 profile：常驻/目录/窄查询的 token 实测
 ```
 

@@ -381,6 +381,7 @@ test('list projects signatures once per registry generation', async () => {
 
 test('schema cleans names and answers each tool once', async () => {
   const toolbox = mount()
+  assert.equal(toolbox.parameters.tools.type, 'json', 'a singular string must pass argument validation')
   const result = await toolbox.execute(
     { action: 'schema', tools: ['read', ' read ', 7, 'read'] },
     makeExec(undefined),

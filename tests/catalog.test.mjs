@@ -172,6 +172,20 @@ test('a JSON Schema wrapper without type:object is still read as a wrapper', () 
   assert.equal(parameterSignature(wrapped), 'path:str, recursive?:bool')
 })
 
+test('a wrapper keeps valid schema metadata such as $id', () => {
+  const wrapped = {
+    properties: { path: { type: 'string' } },
+    required: ['path'],
+    $id: 'urn:example:input',
+  }
+  assert.equal(parameterSignature(wrapped), 'path:str')
+})
+
+test('a direct parameter named properties is not mistaken for a wrapper', () => {
+  assert.equal(parameterSignature({ properties: { type: 'string' } }), 'properties?:str')
+  assert.equal(parameterSignature({ properties: { type: 'object', properties: { inner: { type: 'string' } } } }), 'properties?:obj')
+})
+
 test('estimateTokens prices Hangul as CJK, not as ASCII', () => {
   assert.equal(estimateTokens('한국어'), 3)
   assert.ok(estimateTokens('한국어') > '한국어'.length / 4)
