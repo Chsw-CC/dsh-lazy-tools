@@ -1,6 +1,6 @@
 {
   "name": "dsh-lazy-tools",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "按需加载工具与技能：用一个 toolbox 入口替代常驻的全部工具 schema，显著降低上下文与 token 占用。",
   "license": "MIT",
   "type": "module",
@@ -31,8 +31,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test tests/",
-    "check": "node --check lib/index.js && node --test tests/"
+    "test": "bun test tests/",
+    "check": "node --check lib/index.js && bun test tests/"
   },
   "dsh": {
     "bundle": {

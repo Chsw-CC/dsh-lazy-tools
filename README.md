@@ -39,6 +39,8 @@ pnpm add link:<本目录绝对路径>
     toolName: toolbox            # 模型看到的工具名
     keep: []                     # 始终可见、不进工具箱的工具名
     catalogDescriptionChars: 96  # 目录每行摘要长度
+    catalogTokenBudget: 1200     # 一次 list 的 token 预算；超了自动降级（摘要 → 纯名称 → 前缀计数）
+    # keep 支持通配符：['read_*', 'todo_*'] 表示这一族核心工具始终 eager
     hideOthers: true             # false = 只加工具箱、不收窄视图
     skills: true                 # 目录里是否包含技能，并开放 {action:"skill"}
 ```
@@ -82,7 +84,23 @@ pnpm add link:<本目录绝对路径>
 ## 开发
 
 ```bash
-bun test tests/      # 21 个用例：目录格式化 + 装配/收窄/分发/提升 + 四条不变量
+bun test tests/      # 24 个用例：目录格式化 + 装配/收窄/分发/提升 + 四条不变量
 ```
 
 `lib/catalog.js` 是零依赖的纯函数，`lib/index.js` 只负责服务接线。
+
+## 同类插件
+
+同赛道里做得更早、也更完整的几个：
+
+- [everclear077/dsh-progressive-tools](https://github.com/everclear077/dsh-progressive-tools) — `stable-proxy`：固定请求面、目录留在内存、派发走普通管线；核心论点是工具列表必须字节稳定，否则缓存前缀失效。
+- [Letter2025/dsh-tool-search](https://github.com/Letter2025/dsh-tool-search) — Hermes 风格分层披露：0–3 四档，`tool_search`/`tool_describe`/`tool_call` 三件套，核心工具 eager。
+- [vibeinging/dsh-tool-search](https://github.com/vibeinging/dsh-tool-search) — 同样用 `ctx.tools.restrict()` 收窄，选中的工具持久化到会话事件，独立的父级过滤仍然优先。
+- [Imzl-zl/dsh-toolbox-ui](https://github.com/Imzl-zl/dsh-toolbox-ui) — 面向 MCP 的按服务器延迟加载（ToolSearch），默认关闭。
+- [Jesse-njx/dsh-skillport](https://github.com/Jesse-njx/dsh-skillport) — 技能侧的渐进披露索引，正文按需加载。
+- [menotbobbybrown/dsh-plugin-mcp](https://github.com/menotbobbybrown/dsh-plugin-mcp) — MCP 桥 + BM25 工具检索 + 动态 token 预算。
+
+本插件的差异：不做语义检索，也不替换执行器。可见面只留一个工具箱，其余靠注册表的
+`restrict()` 收窄；`call` 走自己的 `ToolExecutionPipeline`，因此审批与 guard 与直调一致。
+代价是每次 `use` 都会改可见列表——上面 dsh-progressive-tools 的论点直接命中这一点，
+所以结果里会明确写出缓存前缀失效。

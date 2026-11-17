@@ -125,7 +125,7 @@ test('list renders a compact catalog and omits the toolbox itself', async () => 
   apply(makeContext(), {})
   const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
   assert.equal(result.ok, true)
-  assert.ok(result.text.startsWith('Tools (2):'))
+  assert.ok(result.text.startsWith('Tools (2, about'), 'the header reports the withheld budget')
   assert.ok(result.text.includes('- apply_patch — Apply a patch to a file.'))
   assert.ok(!result.text.includes('- toolbox'))
 })
@@ -288,4 +288,28 @@ test('a tool that calls back into the toolbox hits the nesting guard', async () 
   } finally {
     delete globalThis.__reenter
   }
+})
+
+test('keep accepts wildcard patterns', async () => {
+  restricted.length = 0
+  handlers.clear()
+  registered.length = 0
+  apply(makeContext(), { keep: ['read_*', 'apply_patch'] })
+  handlers.get('agent/created')({ agent: makeAgent() })
+  assert.deepEqual(restricted[0], { allow: ['toolbox', 'read_file', 'apply_patch'] })
+})
+
+test('a large catalog is compressed to fit the token budget', async () => {
+  const many = []
+  for (let index = 0; index < 80; index++) many.push({ name: 'mcp_' + index + '_lookup', description: 'Looks something up in server ' + index + '.' })
+  const ctx = makeContext()
+  const definitions = ctx.tools.definitions
+  ctx.tools.definitions = () => [...many]
+  registered.length = 0
+  apply(ctx, { catalogTokenBudget: 40 })
+  const result = await registered.at(-1).execute({ action: 'list' }, makeExec(undefined))
+  ctx.tools.definitions = definitions
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('listing tier 3'), 'the listing degrades instead of overrunning')
+  assert.ok(result.text.length < 2000, 'the answer stays inside the budget')
 })

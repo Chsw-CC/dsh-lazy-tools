@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildCatalog, matchesQuery, summarize } from '../lib/catalog.js'
+import { buildCatalog, buildTieredCatalog, matchesPattern, matchesQuery, summarize } from '../lib/catalog.js'
 
 test('summarize collapses whitespace and clips long text', () => {
   assert.equal(summarize('  a\n  b\t c  ', 40), 'a b c')
@@ -41,3 +41,44 @@ test('buildCatalog renders a bare name when the description is empty', () => {
   const built = buildCatalog([{ name: 'mystery' }])
   assert.equal(built.text, '- mystery')
 })
+
+test('matchesPattern treats only * as special', () => {
+  assert.equal(matchesPattern('read_file', 'read_*'), true)
+  assert.equal(matchesPattern('read_file', 'read_file'), true)
+  assert.equal(matchesPattern('write_file', 'read_*'), false)
+  assert.equal(matchesPattern('todo_write', 'todo_*'), true)
+  assert.equal(matchesPattern('a.b', 'a.b'), true, 'a dot is literal, not a regex wildcard')
+  assert.equal(matchesPattern('axb', 'a.b'), false)
+})
+
+test('buildTieredCatalog degrades the listing instead of overrunning the budget', () => {
+  const entries = [
+    { name: 'mcp_alpha', description: 'Alpha lookup.' },
+    { name: 'mcp_beta', description: 'Beta lookup.' },
+    { name: 'read_file', description: 'Read a file.' },
+  ]
+
+  const detailed = buildTieredCatalog(entries, { budgetChars: 10000 })
+  assert.equal(detailed.tier, 1)
+  assert.ok(detailed.text.includes('Alpha lookup.'))
+
+  // Measure, don't guess: the detailed form is 80 characters, names alone 34.
+  assert.equal(detailed.text.length, 80)
+  const simplyNamed = buildTieredCatalog(entries, { budgetChars: 100 })
+  assert.equal(simplyNamed.tier, 1)
+
+  const groups = buildTieredCatalog(entries, { budgetChars: 24 })
+  assert.equal(groups.tier, 3)
+  assert.equal(groups.text, '- mcp_* (2)\n- read_* (1)')
+  assert.equal(groups.shown, 3, 'a degraded listing still says how much it covers')
+
+  // The property that matters: a rendered tier fits its budget, except for the
+  // bounded overflow note, which no budget can shrink below its own wording.
+  for (const budget of [1, 8, 20, 23, 24, 30, 34, 40, 80, 1000]) {
+    const rendered = buildTieredCatalog(entries, { budgetChars: budget })
+    const fits = rendered.text.length <= budget
+    const isNote = rendered.text.startsWith('…[+')
+    assert.ok(fits || isNote, 'budget ' + budget + ' overran with: ' + rendered.text)
+  }
+})
+

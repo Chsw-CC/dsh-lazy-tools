@@ -3,13 +3,15 @@
 export interface Config {
   /** Model-facing tool name (default "toolbox"). */
   toolName?: string
-  /** Tool names that stay visible next to the toolbox (default: none). */
+  /** Tools that stay visible next to the toolbox. `*` is the only wildcard, e.g. `read_*`. */
   keep?: string[]
-  /** Characters of each description kept in a compact catalog line (default 96). */
+  /** Characters of each description kept in a catalog line (default 96). */
   catalogDescriptionChars?: number
-  /** Hide every other tool per agent (default true). */
+  /** Token budget for one catalog listing; the listing degrades instead of overrunning it (default 1200). */
+  catalogTokenBudget?: number
+  /** Hide every other tool per agent (`false` only adds the toolbox and narrows nothing). */
   hideOthers?: boolean
-  /** Include the skill catalog and the skill loader action (default true). */
+  /** Include the skill catalog and the `skill` action (default true). */
   skills?: boolean
 }
 
