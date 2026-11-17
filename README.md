@@ -35,7 +35,7 @@ list（目录） → schema（参数） → call（执行）
 | 场景 | 路径 | 步数 |
 | --- | --- | --- |
 | 已知工具名与参数名 | `call` 直调 | 1 |
-| 知道能力、不确定参数名 | `list {query:"…"}`（命中 ≤ `listSchemaLimit` 时内联这些工具的完整 schema）→ `call` | 2 |
+| 知道能力、不确定参数名 | `list {query:"…"}`（命中 ≤ `listSchemaLimit` 且放得进剩余预算时内联完整 schema）→ `call` | 2 |
 | 不知道有哪些工具 | `list`（每行带参数签名）→ `call` | 2 |
 | 猜错工具名 | 报错附最近的名字 → `call` | 2 |
 | 参数写错 | 报错附该工具的完整 schema → `call` | 2 |
@@ -47,7 +47,11 @@ list（目录） → schema（参数） → call（执行）
 
 | 路径 | 改动前 | 改动后 |
 | --- | --- | --- |
-| 到达首次真实调用 | list + schema ≈ 1237 token / 3 次往返 | 已知参数：1 次往返；`list{query}`+call ≈ 356 token / 2 次往返；不熟悉：list+call ≈ 1037 token / 2 次往返 |
+| 到达首次真实调用 | list + schema ≈ 1242 token / 3 次往返 | 已知参数：≈0 token / 1 次往返；`list{query}`+call ≈ 178 token / 2 次往返；不熟悉：list+call ≈ 1042 token / 2 次往返 |
+
+中文为主的同一批工具：list + schema ≈ 1559 token → list+call ≈ 672 token，`list{query}`+call ≈ 458 token。
+窄查询那一路按**实际命中行**的 schema 计费（不再拿一个没命中的工具当样本），命中数超过
+`listSchemaLimit` 时不内联，改由参数被拒时的错误回传 schema，仍是 2 次往返。
 
 复现：`bun scripts/measure-first-call.mjs`（同一份 `lib/catalog.js`，不依赖 Harness 运行时）。
 
@@ -95,7 +99,7 @@ pnpm add link:<本目录绝对路径>
 
 | action | 参数 | 结果 |
 | --- | --- | --- |
-| `list` | `query?` | 已加载工具与技能的名称 + 参数签名 + 一行摘要；带 `query` 且命中不超过 `listSchemaLimit` 时，末尾附这些工具的完整 schema |
+| `list` | `query?` | 已加载工具与技能的名称 + 参数签名 + 一行摘要；带 `query`、命中不超过 `listSchemaLimit` 且完整响应放得进 `catalogTokenBudget` 时，末尾附这些工具的完整 schema（否则给出 `schema` 指针） |
 | `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 schema；未知名附最近的名字 |
 | `call` | `tool`, `arguments` | 走完整策略管线执行该工具；参数被拒时附该工具的完整 schema |
 | `skill` | `skill` | 该技能的完整说明正文 |
@@ -129,8 +133,8 @@ pnpm add link:<本目录绝对路径>
 - **签名不臆造**：参数签名从工具自身 schema 推导；推不出来就是空串，那一行与改动前的目录逐字相同。
   截断按「整个参数」丢弃并补 `…`，不会切出半个参数名。
 - **预算按 token 计**：`catalogTokenBudget` 用估计 token 判定，中文按 1 字 ≈ 1 token 计。
-  改动前按「4 字符 = 1 token」估，一个 40 工具的中文 profile 实测 1375 token 却记在 1200 的账上；
-  改动后同一目录 668 token。预算不够时先把摘要缩短到下限 18 字符，仍不够才丢摘要，并如实说明。
+  改动前按「4 字符 = 1 token」估，一个 40 工具的中文 profile 实测 1380 token 却记在 1200 的账上；
+  改动后同一目录 672 token。预算不够时先把摘要缩短到下限 18 字符，仍不够才丢摘要，并如实说明。
 - **降级有出口**：目录退到 tier 3 时结果里写明「不足以发起调用」并给出 `query` 恢复路径；
   技能提供方不答时写明超时，而不是显示成「没有技能」。
 

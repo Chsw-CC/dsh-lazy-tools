@@ -46,7 +46,10 @@ function makeRegistry(count, chineseShare) {
   for (let index = 0; index < count; index++) {
     const useChinese = index / count >= 1 - chineseShare
     const pool = useChinese ? chinese : english
-    const name = (index < 12 ? ['read_file', 'write_file', 'apply_patch', 'bash', 'web_search', 'web_fetch', 'todo_read'][index % 7] : 'mcp_s' + (index % 5) + '_tool' + index)
+    const core = ['read_file', 'write_file', 'apply_patch', 'bash', 'web_search', 'web_fetch', 'todo_read']
+    // Names must be unique: a duplicated name would inflate the match count and
+    // make a schema lookup ambiguous, so neither number would mean anything.
+    const name = index < core.length ? core[index] : 'mcp_s' + (index % 5) + '_tool' + index
     entries.push({
       name,
       description: pool[index % pool.length],
@@ -59,6 +62,18 @@ function makeRegistry(count, chineseShare) {
 
 /** Token cost of one rendered string. */
 const cost = text => estimateTokens(text)
+
+/** Token cost of the schemas a narrow listing actually carries, for its own matches. */
+function matchedSchemaCost(rows, registry) {
+  let total = 0
+  for (const row of rows) {
+    const entry = registry.find(candidate => candidate.name === row.name)
+    if (entry === undefined) continue
+    // Same projection the plugin prints: name plus the parameter tree, pretty-printed.
+    total += cost(JSON.stringify({ name: entry.name, parameters: entry.schema.parameters }, null, 2))
+  }
+  return total
+}
 
 /** The pre-0.3.0 listing: names + summaries, character budget (1200 tokens × 4 chars). */
 function legacyListing(entries) {
@@ -80,18 +95,37 @@ for (const scenario of scenarios) {
   const legacy = legacyListing(registry)
   const lazy = lazyListing(registry)
   const narrow = lazyListing(registry, 'read')
+  // The narrow cost is the listing plus the schemas of the rows that matched —
+  // not an arbitrary tool that the query never matched.
+  const narrowSchemas = matchedSchemaCost(narrow.entries, registry)
+  const narrowListingTokens = cost(narrow.text)
+  // Mirror the plugin's own gate: schemas are inlined only for a genuinely
+  // narrow hit set (at most listSchemaLimit rows) that still fits the budget.
+  const LIST_SCHEMA_LIMIT = 3
+  const inlineSchemas = narrow.tier <= 2
+    && narrow.entries.length > 0
+    && narrow.entries.length <= LIST_SCHEMA_LIMIT
+    && narrowSchemas <= 1200 - narrowListingTokens
   const oneSchema = JSON.stringify({ name: 'bash', parameters: makeSchema(3) }, null, 2)
+  const narrowNote = inlineSchemas
+    ? '+' + narrowSchemas + ' inlined schema tokens'
+    : (narrow.entries.length > LIST_SCHEMA_LIMIT
+      ? 'more matches than the inline limit (' + LIST_SCHEMA_LIMIT + '), so schemas stay behind {action:"schema"}'
+      : 'schemas do not fit the listing budget')
 
   console.log('=== ' + scenario.label + ': ' + registry.length + ' tools ===')
   console.log('legacy listing      tier ' + legacy.tier + ', ~' + cost(legacy.text) + ' tokens (char budget 4800)')
   console.log('0.3.0 listing       tier ' + lazy.tier + ', ~' + cost(lazy.text) + ' tokens (token budget 1200, summaryChars ' + lazy.summaryChars + ')')
-  console.log('0.3.0 narrow query  tier ' + narrow.tier + ', ~' + cost(narrow.text) + ' tokens')
-  console.log('one full schema     ~' + cost(oneSchema) + ' tokens')
+  console.log('0.3.0 narrow query  tier ' + narrow.tier + ', ~' + narrowListingTokens + ' tokens, '
+    + narrow.entries.length + ' matches: ' + narrowNote)
+  console.log('one full schema     ~' + cost(oneSchema) + ' tokens (bash)')
   console.log('')
   console.log('cost to reach the first real call')
   console.log('  before            list + schema       ~' + (cost(legacy.text) + cost(oneSchema)) + ' tokens, 3 model turns')
   console.log('  after (knows args) direct call        ~0 tokens, 1 model turn')
-  console.log('  after (narrow)     list{query} + call ~' + (cost(narrow.text) + cost(oneSchema)) + ' tokens, 2 model turns')
+  console.log('  after (narrow)     list{query} + call ~' + (inlineSchemas
+    ? (narrowListingTokens + narrowSchemas) + ' tokens, 2 model turns'
+    : narrowListingTokens + ' tokens, 2 model turns (a rejected argument object carries the schema)'))
   console.log('  after (unfamiliar) list + call        ~' + cost(lazy.text) + ' tokens, 2 model turns')
   console.log('')
 }

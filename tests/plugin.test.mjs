@@ -148,6 +148,26 @@ test('schema returns the projected JSON schema of a hidden tool', async () => {
   assert.ok(result.text.includes('"action"') === false)
 })
 
+test('an oversized schema answer stays parseable and names what did not fit', async () => {
+  const big = { name: 'big_tool', description: 'A tool with a very large parameter tree.', parameters: {} }
+  for (let index = 0; index < 300; index++) {
+    big.parameters['param_' + index] = { type: 'string', description: 'x'.repeat(200) }
+  }
+  const items = [big, { name: 'small_tool', description: 'A small tool.', parameters: { path: { type: 'string' } } }, { name: 'toolbox' }]
+  const ctx = makeContext()
+  ctx.tools.definitions = () => items
+  ctx.tools.executable = name => items.find(item => item.name === name)
+  registered.length = 0
+  apply(ctx, {})
+  const result = await registered.at(-1).execute({ action: 'schema', tools: ['big_tool', 'small_tool'] }, makeExec(undefined))
+  assert.ok(result.text.includes('"param_299"'), 'the whole first schema is present, never cut mid-JSON')
+  assert.ok(result.text.includes('did not fit one answer'), 'the deferred schema is named')
+  assert.equal(result.text.includes('"name": "small_tool"'), false, 'and it is not half-rendered')
+  // Restore the shared fixture for the tests that follow.
+  registered.length = 0
+  apply(makeContext(), {})
+})
+
 test('call dispatches the hidden tool with the parent token', async () => {
   prepared.length = 0
   const exec = makeExec(makeAgent())
@@ -274,6 +294,31 @@ test('releasing when nothing was promoted does not touch the registry', async ()
   assert.equal(restricts, before, 'a no-op release installs nothing')
 })
 
+test('release is a no-op when the lazy view is off', async () => {
+  let restricts = 0
+  const agent = { id: 'agent-off', ctx: { tools: { restrict: () => { restricts++; return () => {} } } } }
+  registered.length = 0
+  apply(makeContext(), { hideOthers: false })
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'release' }, makeExec(agent))
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('lazy view is off'))
+  assert.equal(restricts, 0, 'hideOthers: false is not overridden by release')
+})
+
+test('call accepts an argument object sent as a JSON string', async () => {
+  prepared.length = 0
+  registered.length = 0
+  apply(makeContext(), {})
+  const result = await registered.at(-1).execute(
+    { action: 'call', tool: 'apply_patch ', arguments: '{"path":"a"}' },
+    makeExec(undefined),
+  )
+  assert.equal(result.ok, true)
+  assert.equal(prepared[0].name, 'apply_patch', 'surrounding whitespace does not change the tool')
+  assert.equal(prepared[0].arguments, JSON.stringify({ path: 'a' }), 'the JSON string is parsed into the object the tool declares')
+})
+
 test('a large nested payload is returned whole, not clipped', async () => {
   const payload = 'x'.repeat(40000)
   globalThis.__nestedText = payload
@@ -340,6 +385,44 @@ test('a narrow query inlines the schemas of its few matches', async () => {
   const result = await registered[0].execute({ action: 'list', query: 'read' }, makeExec(undefined))
   assert.ok(result.text.includes('- read_file(path:str'), 'the match is still listed')
   assert.ok(result.text.includes('"path"'), 'and its schema arrives in the same answer')
+})
+
+test('a narrow listing spends the budget it has left, not a fresh one', async () => {
+  registered.length = 0
+  // The rows, header and footer already cost something; schemas only get the
+  // remainder, so a small budget must defer them instead of overshooting.
+  apply(makeContext(), { catalogTokenBudget: 70 })
+  const result = await registered[0].execute({ action: 'list', query: 'read' }, makeExec(undefined))
+  assert.ok(result.text.includes('- read_file(path:str'), 'the match is still listed with its signature')
+  assert.ok(result.text.includes('left: {action:"schema", tools:["read_file"]} returns them'),
+    'the schemas are deferred with a pointer, not appended past the budget')
+  assert.equal(result.text.includes('"path": {'), false, 'no schema body was appended')
+})
+
+test('a listing is rebuilt when the registry changes while skills load', async () => {
+  const items = [
+    { name: 'read_file', description: 'Read a text file.', parameters: { path: { type: 'string', required: true } } },
+    { name: 'toolbox', description: 'the lazy entry point' },
+  ]
+  const ctx = makeContext()
+  ctx.tools.definitions = () => items
+  ctx.tools.executable = name => items.find(item => item.name === name)
+  ctx.get = key => (key === 'skills'
+    ? {
+      list: async () => {
+        // A tool is replaced while the listing awaits skill discovery.
+        items[0].name = 'read_remote'
+        items[0].parameters = { url: { type: 'string', required: true } }
+        handlers.get('tools/change')()
+        return []
+      },
+    }
+    : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const result = await registered.at(-1).execute({ action: 'list', query: 'read' }, makeExec(undefined))
+  assert.ok(result.text.includes('read_remote(url:str)'), 'the row reflects the generation in force after the await')
+  assert.equal(result.text.includes('read_file'), false, 'no stale signature survives the change')
 })
 
 test('listSchemaLimit 0 keeps schemas out of a narrow listing', async () => {

@@ -127,6 +127,23 @@ test('signatureOf drops whole fields instead of cutting a name, and stays empty 
   assert.equal(signatureOf({ type: 'object' }), '')
 })
 
+test('signatureOf keeps parameters whose names are schema keywords', () => {
+  // `pattern`, `type` and `format` are metadata keys *and* legal parameter names.
+  // Dropping them would hide a required argument from a signature the model calls from.
+  const parameters = {
+    path: { type: 'string', required: true },
+    pattern: { type: 'string', required: true },
+    type: { type: 'string', required: true },
+    format: { type: 'string', enum: ['json', 'text'] },
+  }
+  assert.equal(signatureOf(parameters), '(path:str, pattern:str, type:str, format?:"json|text")')
+})
+
+test('signatureOf still drops metadata whose value is not a descriptor', () => {
+  assert.equal(signatureOf({ description: 'a tool', path: { type: 'string' } }), '(path?:str)')
+  assert.equal(signatureOf({ type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] }), '(pattern:str)')
+})
+
 test('suggestNames recovers a near-miss without a listing', () => {
   const entries = [{ name: 'read_file' }, { name: 'write_file' }, { name: 'run_code' }]
   assert.equal(suggestNames(entries, 'read_fil')[0], 'read_file', 'the closest name comes first')

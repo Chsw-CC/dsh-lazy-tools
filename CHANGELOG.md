@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.1
+
+主题是「把 0.3.0 的承诺核实」：四处边界条件会让目录在不该出错的地方出错，修完再谈性能。
+
+- **关键字同名的参数不再被吞**（`lib/catalog.js`）：`pattern` / `type` / `format` 既是 schema 元数据键，
+  也可能是工具的真实参数名。原实现只按名字过滤，一个名为 `pattern` 的必填参数会从签名里消失，
+  签名又不带 `…`，模型照着签名调用就会漏参数。现在按形状判断：值像 descriptor 就保留。
+- **内联 schema 与目录共用一份预算**（`lib/index.js`）：原来只判断 schema 段自身是否超预算，
+  行文本已花掉的钱没算进去，`catalogTokenBudget: 1200` 时 300 + 1100 可以各自通过、合并超支。
+  现在按完整响应的剩余预算判定，放不下就给出 `{action:"schema"}` 指针。
+- **一次 list 只描述一个注册表代次**（`lib/index.js`）：行在 `await listSkills()` 之前渲染完毕，
+  等待期间 `tools/change` 替换工具会留下「旧签名 + 新 schema」两套契约。现在用 `generation`
+  计数器比对，代次变了就按新注册表重建，再渲染内联 schema。
+- **schema 投影按定义对象缓存**（`lib/index.js`）：`schema` 动作与内联 schema 会反复投影同一份定义，
+  现在用 `WeakMap<definition, block>` 缓存；定义被替换就是另一个对象，缓存自然失效，不会串 schema。
+- **测量脚本按命中行计费**（`scripts/measure-first-call.mjs`）：窄查询成本原本拿固定的 `bash`
+  schema 当样本，而 `bash` 并不匹配 `query:"read"`，数字偏大；fixture 里前 12 个工具还存在重名。
+  现在名字唯一，只累计命中行的 schema，并分别打印命中数、是否内联、以及中文 profile 的结果。
+- **提示词去重与压缩**：`toolbox` 描述里同一句 "Their schemas are NOT loaded into this prompt"
+  拼了两遍，删掉重复；目录 header / footer 各压缩若干 token，每次 list 都省。
+
+复测（40 工具，35% 中文）：list + schema ≈ 1242 → 已知参数 1 次往返；`list{query}`+call ≈ 178；
+不熟悉 list+call ≈ 1042。中文为主：1559 → 672 / 458。测试 42 → 46 条。
+
 ## 0.3.0
 
 主题是「首次工具调用」：惰性目录不该向模型收两次问路费，也不该因为目录降级把模型逼到绕开工具。
