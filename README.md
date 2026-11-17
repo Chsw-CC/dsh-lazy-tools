@@ -16,10 +16,52 @@ after:   toolbox(约 400 tok) + 目录（按需） + 实际用到的 schema（�
 
 1. **窄化视图**：插件为每个 agent 调用 `ctx.tools.restrict({ allow: ['toolbox', ...keep] })`，
    这是注册表自带的按 agent 收窄接口，因此提示装配、会话回放与 UI 呈现都保持一致。
-2. **按需读取**：`{action:"list"}` 给出工具与技能的名称加一行摘要；
+2. **按需读取**：`{action:"list"}` 给出工具与技能的名称、**参数签名**和一行摘要；
    `{action:"schema"}` 只取真正要用的那几个 schema；`{action:"skill"}` 读取技能正文。
 3. **不绕过策略**：`{action:"call"}` 通过插件自己的 `ToolExecutionPipeline` 重放调用，
    审批、guard、超时、post-execute 策略与结果渲染全部照常生效。
+
+## 首次工具调用的成本
+
+惰性目录的代价曾经是「用一个工具要三次往返」：
+
+```
+list（目录） → schema（参数） → call（执行）
+```
+
+每一步都是一次完整的模型往返，而 `list`/`schema` 的输出会永久留在会话里——越晚调到真正的工具，
+上下文越贵。0.3.0 把这条路径压到 1–2 步，且**不靠放宽可见工具集**：
+
+| 场景 | 路径 | 步数 |
+| --- | --- | --- |
+| 已知工具名与参数名 | `call` 直调 | 1 |
+| 知道能力、不确定参数名 | `list {query:"…"}`（命中 ≤ `listSchemaLimit` 时内联这些工具的完整 schema）→ `call` | 2 |
+| 不知道有哪些工具 | `list`（每行带参数签名）→ `call` | 2 |
+| 猜错工具名 | 报错附最近的名字 → `call` | 2 |
+| 参数写错 | 报错附该工具的完整 schema → `call` | 2 |
+
+所以惰性目录省的是**常驻 schema**，不再向模型收「先问两轮」的路费。只有 `use` 会改可见列表，
+也只有它付 prompt-cache 前缀重算的代价。
+
+一个 40 工具（35% 中文）的模拟 profile，用 `scripts/measure-first-call.mjs` 实测：
+
+| 路径 | 改动前 | 改动后 |
+| --- | --- | --- |
+| 到达首次真实调用 | list + schema ≈ 1237 token / 3 次往返 | 已知参数：1 次往返；`list{query}`+call ≈ 356 token / 2 次往返；不熟悉：list+call ≈ 1037 token / 2 次往返 |
+
+复现：`bun scripts/measure-first-call.mjs`（同一份 `lib/catalog.js`，不依赖 Harness 运行时）。
+
+### 反绕路：目录降级不能变成放弃工具的理由
+
+压缩目录原本只输出 `mcp_* (37)` 这种名字普查：模型既不能调，也猜不出参数名，最省事的做法就是
+绕开工具、凭记忆作答——一次绕路的 token 代价远大于省下的目录体积。因此：
+
+- tier 3 的结果里明确写出「这是一份名字普查，不足以发起调用」，并给出 `{action:"list", query:"…"}`
+  的恢复路径；tier 2 也会说明摘要被丢掉、签名仍在；
+- 未知工具名随错误一起返回最近的名字，参数被拒时随错误一起返回该工具的完整 schema；
+- 系统提示里保留一条硬规则：工具能产出答案或产物时必须调用，不得凭记忆作答、手写工具输出或猜测返回值；
+- 技能发现超过 2 秒不再等待，并如实写明「技能目录不可用」——慢提供方不会把第一次调用拖成超时，
+  也不会被误读成「没有技能」。
 
 ## 安装
 
@@ -40,6 +82,10 @@ pnpm add link:<本目录绝对路径>
     keep: []                     # 始终可见、不进工具箱的工具名
     catalogDescriptionChars: 96  # 目录每行摘要长度
     catalogTokenBudget: 1200     # 一次 list 的 token 预算；超了自动降级（摘要 → 纯名称 → 前缀计数）
+    catalogSignatureChars: 64    # 每行参数签名的长度上限
+    signatures: true             # 目录里是否带参数签名（false = 只列名字）
+    listSchemaLimit: 3           # 带 query 的 list 命中不超过几个时，直接内联这些工具的完整 schema（0 = 关闭）
+    autoSchema: true             # 参数被拒时，是否把该工具的完整 schema 附在错误后面
     # keep 支持通配符：['read_*', 'todo_*'] 表示这一族核心工具始终 eager
     hideOthers: true             # false = 只加工具箱、不收窄视图
     skills: true                 # 目录里是否包含技能，并开放 {action:"skill"}
@@ -49,9 +95,9 @@ pnpm add link:<本目录绝对路径>
 
 | action | 参数 | 结果 |
 | --- | --- | --- |
-| `list` | `query?` | 已加载工具与技能的名称 + 一行摘要 |
-| `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 schema |
-| `call` | `tool`, `arguments` | 走完整策略管线执行该工具 |
+| `list` | `query?` | 已加载工具与技能的名称 + 参数签名 + 一行摘要；带 `query` 且命中不超过 `listSchemaLimit` 时，末尾附这些工具的完整 schema |
+| `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 schema；未知名附最近的名字 |
+| `call` | `tool`, `arguments` | 走完整策略管线执行该工具；参数被拒时附该工具的完整 schema |
 | `skill` | `skill` | 该技能的完整说明正文 |
 | `plugins` | — | 已安装插件清单（名称 + 启用状态） |
 | `use` | `tools: string[]` | 把这些工具提升为**本会话**常驻可见 |
@@ -80,11 +126,18 @@ pnpm add link:<本目录绝对路径>
 - **不裁剪真实结果**：`call` 与 `skill` 返回原文；只有 `list`/`schema`/`plugins` 有字符预算。
 - **原子替换**：新限制先装、旧限制后释放，替换失败时旧限制原样保留，不会出现「裸奔」窗口。
 - **递归护栏**：工具箱嵌套调用最多 6 层。
+- **签名不臆造**：参数签名从工具自身 schema 推导；推不出来就是空串，那一行与改动前的目录逐字相同。
+  截断按「整个参数」丢弃并补 `…`，不会切出半个参数名。
+- **预算按 token 计**：`catalogTokenBudget` 用估计 token 判定，中文按 1 字 ≈ 1 token 计。
+  改动前按「4 字符 = 1 token」估，一个 40 工具的中文 profile 实测 1375 token 却记在 1200 的账上；
+  改动后同一目录 668 token。预算不够时先把摘要缩短到下限 18 字符，仍不够才丢摘要，并如实说明。
+- **降级有出口**：目录退到 tier 3 时结果里写明「不足以发起调用」并给出 `query` 恢复路径；
+  技能提供方不答时写明超时，而不是显示成「没有技能」。
 
 ## 开发
 
 ```bash
-bun test tests/      # 24 个用例：目录格式化 + 装配/收窄/分发/提升 + 四条不变量
+bun test tests/      # 42 个用例：目录/签名/建议/预算 + 装配/收窄/分发/提升 + 首次调用路径与不变量
 ```
 
 `lib/catalog.js` 是零依赖的纯函数，`lib/index.js` 只负责服务接线。

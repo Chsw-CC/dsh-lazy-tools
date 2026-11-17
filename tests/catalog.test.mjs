@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildCatalog, buildTieredCatalog, matchesPattern, matchesQuery, summarize } from '../lib/catalog.js'
+import { buildCatalog, buildTieredCatalog, estimateTokens, matchesPattern, matchesQuery, signatureOf, suggestNames, summarize } from '../lib/catalog.js'
 
 test('summarize collapses whitespace and clips long text', () => {
   assert.equal(summarize('  a\n  b\t c  ', 40), 'a b c')
@@ -82,3 +82,81 @@ test('buildTieredCatalog degrades the listing instead of overrunning the budget'
   }
 })
 
+
+// --- signatures, suggestions, token-accurate budgets ------------------------
+
+test('estimateTokens counts CJK characters as tokens, not quarters', () => {
+  assert.equal(estimateTokens('abcd'), 1)
+  assert.equal(estimateTokens('中文'), 2)
+  // 6 CJK characters are 6 tokens; the same text measured in characters would be 1.5.
+  assert.equal(estimateTokens('中文段落测试'), 6)
+  assert.ok(estimateTokens('中文段落测试') > '中文段落测试'.length / 4, 'a Chinese phrase is not billed as four chars per token')
+})
+
+test('signatureOf renders optional and enum parameters from the defineTool shape', () => {
+  const parameters = {
+    action: { type: 'string', required: true, enum: ['list', 'call'] },
+    query: { type: 'string' },
+    limit: { type: 'number' },
+  }
+  assert.equal(signatureOf(parameters), '(action:"list|call", query?:str, limit?:num)')
+})
+
+test('signatureOf reads JSON Schema properties and required', () => {
+  const parameters = {
+    type: 'object',
+    properties: { path: { type: 'string' }, depth: { type: 'integer' } },
+    required: ['path'],
+  }
+  assert.equal(signatureOf(parameters), '(path:str, depth?:int)')
+})
+
+test('signatureOf drops whole fields instead of cutting a name, and stays empty when unknown', () => {
+  const parameters = {
+    first_parameter_name: { type: 'string' },
+    second_parameter_name: { type: 'string' },
+  }
+  const clipped = signatureOf(parameters, 30)
+  assert.ok(clipped.includes('first_parameter_name'), 'the first field survives')
+  assert.ok(clipped.endsWith(', …)'), 'the tail is dropped by whole fields')
+  assert.ok(!clipped.includes('second_parameter_nam…'), 'no field is cut mid-name')
+
+  assert.equal(signatureOf(undefined), '')
+  assert.equal(signatureOf({}), '')
+  assert.equal(signatureOf('nonsense'), '')
+  assert.equal(signatureOf({ type: 'object' }), '')
+})
+
+test('suggestNames recovers a near-miss without a listing', () => {
+  const entries = [{ name: 'read_file' }, { name: 'write_file' }, { name: 'run_code' }]
+  assert.equal(suggestNames(entries, 'read_fil')[0], 'read_file', 'the closest name comes first')
+  assert.ok(suggestNames(entries, 'file').includes('read_file'))
+  assert.deepEqual(suggestNames(entries, 'zzz'), [])
+})
+
+test('a token budget is spent in tokens, not characters', () => {
+  const chinese = []
+  for (let index = 0; index < 30; index++) {
+    chinese.push({ name: 'tool_' + index, description: '这是一个比较长的中文工具说明，用来验证预算按 token 计算而不是按字符数计算。' })
+  }
+  const budgeted = buildTieredCatalog(chinese, { budgetTokens: 200 })
+  assert.ok(budgeted.tier >= 2, 'the Chinese catalog does not fit tier 1 in 200 tokens')
+  assert.ok(estimateTokens(budgeted.text) <= 200, 'and the rendered tier really fits the token budget')
+})
+
+test('a tight budget shortens the summary before dropping it', () => {
+  const entries = [
+    { name: 'read_file', description: 'Read a text file from the workspace, honouring a line limit and encoding.', signature: '(path:str, limit?:num)' },
+    { name: 'write_file', description: 'Write a text file into the workspace, creating parents as needed.', signature: '(path:str, content:str)' },
+  ]
+  const shrunk = buildTieredCatalog(entries, { budgetTokens: 30 })
+  assert.equal(shrunk.tier, 1, 'the prose is shortened rather than dropped')
+  assert.ok(shrunk.summaryChars < 96, 'and it says how much was kept')
+  assert.ok(shrunk.text.includes('- read_file(path:str, limit?:num)'), 'the callable signature survives')
+
+  const named = buildTieredCatalog(entries, { budgetTokens: 20 })
+  assert.equal(named.tier, 2, 'past the last useful summary length, the prose goes')
+  assert.equal(named.summaryChars, 0)
+  assert.ok(named.text.includes('- read_file(path:str, limit?:num)'), 'the callable signature survives')
+  assert.ok(!named.text.includes('Read a text file'), 'the prose does not')
+})

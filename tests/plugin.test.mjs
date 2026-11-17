@@ -7,7 +7,14 @@ const sections = []
 const restricted = []
 const handlers = new Map()
 const definitions = [
-  { name: 'read_file', description: 'Read a text file from the workspace.' },
+  {
+    name: 'read_file',
+    description: 'Read a text file from the workspace.',
+    parameters: {
+      path: { type: 'string', required: true },
+      limit: { type: 'number' },
+    },
+  },
   { name: 'apply_patch', description: 'Apply a patch to a file.' },
   { name: 'toolbox', description: 'the lazy entry point' },
 ]
@@ -23,7 +30,11 @@ mock.module('@deepseek-ai/dsh-tools', () => ({
 mock.module('@deepseek-ai/dsh-tools/pipeline', () => ({
   ToolExecutionPipeline: class ToolExecutionPipeline {
     constructor(ctx, source) { this.source = source }
-    async prepare(input) { prepared.push(input); return { kind: 'dispatch', exec: { token: input.token ?? 'x' } } }
+    async prepare(input) {
+      prepared.push(input)
+      if (globalThis.__failPrepare === input.name) throw new Error('invalid arguments: "path" is required')
+      return { kind: 'dispatch', exec: { token: input.token ?? 'x' } }
+    }
     async dispatch() {
       if (typeof globalThis.__reenter === 'function') await globalThis.__reenter()
       return { kind: 'post-result', result: { content: [], isError: false } }
@@ -312,4 +323,96 @@ test('a large catalog is compressed to fit the token budget', async () => {
   assert.equal(result.ok, true)
   assert.ok(result.text.includes('listing tier 3'), 'the listing degrades instead of overrunning')
   assert.ok(result.text.length < 2000, 'the answer stays inside the budget')
+})
+
+// --- first-call path: fewer round trips, no widening -------------------------
+
+test('list carries a parameter signature, so one listing is enough to call', async () => {
+  registered.length = 0
+  apply(makeContext(), {})
+  const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
+  assert.ok(result.text.includes('- read_file(path:str, limit?:num)'), 'the signature is derived from the tool schema')
+})
+
+test('a narrow query inlines the schemas of its few matches', async () => {
+  registered.length = 0
+  apply(makeContext(), {})
+  const result = await registered[0].execute({ action: 'list', query: 'read' }, makeExec(undefined))
+  assert.ok(result.text.includes('- read_file(path:str'), 'the match is still listed')
+  assert.ok(result.text.includes('"path"'), 'and its schema arrives in the same answer')
+})
+
+test('listSchemaLimit 0 keeps schemas out of a narrow listing', async () => {
+  registered.length = 0
+  apply(makeContext(), { listSchemaLimit: 0 })
+  const result = await registered[0].execute({ action: 'list', query: 'read' }, makeExec(undefined))
+  assert.equal(result.text.includes('"path"'), false)
+})
+
+test('signatures can be turned off', async () => {
+  registered.length = 0
+  apply(makeContext(), { signatures: false })
+  const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
+  assert.ok(!result.text.includes('(path:str'), 'no signature is rendered')
+})
+
+test('an unknown tool name comes back with its closest names', async () => {
+  registered.length = 0
+  apply(makeContext(), {})
+  await assert.rejects(
+    () => registered[0].execute({ action: 'call', tool: 'read_fil', arguments: {} }, makeExec(undefined)),
+    /closest loaded names: read_file/,
+  )
+})
+
+test('a rejected argument object returns the schema instead of a bare error', async () => {
+  registered.length = 0
+  apply(makeContext(), {})
+  globalThis.__failPrepare = 'read_file'
+  try {
+    const result = await registered[0].execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(undefined))
+    assert.equal(result.ok, false)
+    assert.match(result.text, /rejected the call/)
+    assert.match(result.text, /invalid arguments/, 'the real rejection text is kept')
+    assert.match(result.text, /"path"/, 'the schema that would have avoided it follows')
+  } finally {
+    delete globalThis.__failPrepare
+  }
+})
+
+test('autoSchema false falls back to a pointer instead of a schema', async () => {
+  registered.length = 0
+  apply(makeContext(), { autoSchema: false })
+  globalThis.__failPrepare = 'read_file'
+  try {
+    const result = await registered[0].execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(undefined))
+    assert.equal(result.ok, false)
+    assert.ok(result.text.includes('{action:"schema", tools:["read_file"]}'))
+    assert.ok(!result.text.includes('"parameters"'))
+  } finally {
+    delete globalThis.__failPrepare
+  }
+})
+
+test('a tier-3 census says it is not enough to call from', async () => {
+  const many = []
+  for (let index = 0; index < 80; index++) many.push({ name: 'mcp_' + index + '_lookup', description: 'Looks something up in server ' + index + '.' })
+  const ctx = makeContext()
+  ctx.tools.definitions = () => many
+  registered.length = 0
+  apply(ctx, { catalogTokenBudget: 40 })
+  const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
+  assert.ok(result.text.includes('listing tier 3'))
+  assert.ok(result.text.includes('not enough to call from'), 'the degraded listing names the recovery')
+  assert.ok(result.text.includes('{action:"list", query:"…"}'))
+})
+
+test('a failing skill provider is reported, not shown as an empty catalog', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'skills' ? { list: () => Promise.reject(new Error('nope')) } : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
+  assert.ok(result.text.includes('skill catalog unavailable'), 'the failure is visible')
+  assert.ok(result.text.includes('- read_file'), 'the tool catalog still answers')
 })
