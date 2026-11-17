@@ -10,11 +10,15 @@ answers that were wrong or unhelpful.
   The estimator now counts one token per CJK character and a quarter per other character, so the
   configured 1200 means 1200 tokens in both languages.
 - **Signatures keep whole parameters and carry types.** `read(path:str, offset?:int)`, with a short
-  enum inlined when there is one. A signature over 160 characters drops whole parameters and
-  ends with `…` instead of cutting a name in half. JSON Schema wrappers are read too.
+  enum inlined when there is one. String enums stay quoted; numeric and boolean enums keep their
+  declared type (`retries:int:1|2`), because `"1|2"` would read as strings. A signature over 160
+  characters drops whole parameters and ends with `…` instead of cutting a name in half. JSON
+  Schema wrappers are read too.
 - **Skill discovery has a 2-second deadline.** A provider that never answers no longer holds the
   first listing hostage; the answer says the catalog was unavailable instead of pretending the
   session has no skills.
+- **One budget covers both catalogs.** The tool and skill listings no longer each receive the full
+  `catalogTokenBudget`; headers and notes are reserved, and the skills catalog gets what is left.
 - **`schema` never splits a JSON block.** Blocks that do not fit one answer are named in a trailing
   note, to be fetched in a second call.
 - **A listing cannot mix registry generations.** If the registry changes while skill discovery is
@@ -25,7 +29,7 @@ answers that were wrong or unhelpful.
   profiles is no longer understated fourfold.
 
 Compatible at the API level; `catalogTokenBudget` keeps its name but its unit is now tokens
-(previously characters × 4). 31 tests; CI runs the suite plus the first-call measurement.
+(previously characters × 4). 33 tests; CI runs the suite plus the first-call measurement.
 
 ## 0.3.0
 

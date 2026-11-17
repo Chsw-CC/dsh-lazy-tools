@@ -316,3 +316,22 @@ test('a hanging skill provider is reported instead of blocking the listing', asy
   assert.ok(elapsed >= 1900, 'the deadline really elapsed, so the bound is exercised')
   assert.ok(elapsed < 5000, 'and the listing still returns promptly after it')
 })
+
+test('the tool and skill catalogs share one token budget', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'skills'
+    ? { list: async () => Array.from({ length: 30 }, (_, index) => ({ name: 'skill_' + index, description: 'A skill.' })) }
+    : undefined)
+  definitions = []
+  for (let index = 0; index < 30; index++) {
+    definitions.push({ name: 'tool_' + index, description: 'A deferred tool used to fill the listing budget completely.', parameters: { path: { type: 'string' } } })
+  }
+  definitions.push({ name: 'toolbox' })
+  registered.length = 0
+  apply(ctx, { catalogTokenBudget: 120 })
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  const skills = result.text.split('Skills (')[1] ?? ''
+  assert.ok(skills.startsWith('30):'), 'the skills section is present and counted: ' + result.text)
+  assert.equal(skills.includes('skill_0'), false, 'no skill row is rendered past the shared budget')
+})

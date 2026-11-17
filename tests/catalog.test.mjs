@@ -100,6 +100,14 @@ test('parameterSignature renders names with types and enums', () => {
   assert.equal(parameterSignature(parameters), 'action:"list|call", path?:str, limit?:num')
 })
 
+test('parameterSignature keeps numeric and boolean enum types', () => {
+  const parameters = {
+    retries: { type: 'integer', required: true, enum: [1, 2] },
+    verbose: { type: 'boolean', enum: [true, false] },
+  }
+  assert.equal(parameterSignature(parameters), 'retries:int:1|2, verbose?:bool:true|false')
+})
+
 test('parameterSignature keeps parameters named like schema keywords', () => {
   const parameters = {
     path: { type: 'string', required: true },
