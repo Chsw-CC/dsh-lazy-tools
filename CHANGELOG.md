@@ -29,7 +29,7 @@ answers that were wrong or unhelpful.
   profiles is no longer understated fourfold.
 
 Compatible at the API level; `catalogTokenBudget` keeps its name but its unit is now tokens
-(previously characters × 4). 33 tests; CI runs the suite plus the first-call measurement.
+(previously characters × 4). 34 tests; CI runs the suite plus the first-call measurement.
 
 ## 0.3.0
 

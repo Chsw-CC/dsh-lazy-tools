@@ -108,6 +108,11 @@ test('parameterSignature keeps numeric and boolean enum types', () => {
   assert.equal(parameterSignature(parameters), 'retries:int:1|2, verbose?:bool:true|false')
 })
 
+test('parameterSignature quotes only the string members of a mixed enum', () => {
+  const parameters = { value: { enum: [1, '1', true, 'true'] } }
+  assert.equal(parameterSignature(parameters), 'value?:1|"1"|true|"true"')
+})
+
 test('parameterSignature keeps parameters named like schema keywords', () => {
   const parameters = {
     path: { type: 'string', required: true },
