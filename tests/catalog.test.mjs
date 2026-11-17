@@ -146,3 +146,44 @@ test('a token budget is spent in tokens, not characters', () => {
   assert.ok(budgeted.tier >= 2, 'the Chinese catalog does not fit tier 1 in 200 tokens')
   assert.ok(estimateTokens(budgeted.text) <= 200, 'and the rendered tier really fits the token budget')
 })
+
+test('a query searches the whole description, not the clipped summary', () => {
+  const description = 'x'.repeat(100) + ' screenshot the selected window'
+  const filtered = buildCatalog([{ name: 'capture', description }], { query: 'screenshot', maxChars: 20 })
+  assert.equal(filtered.shown, 1, 'the match is past the summary budget but still a real match')
+  assert.ok(filtered.text.includes('x'.repeat(19) + '…'), 'the rendered row is still clipped')
+})
+
+test('a query that is not text does not fail the listing', () => {
+  assert.ok(matchesQuery('read', 'reads a file', undefined))
+  assert.ok(matchesQuery('read', 'reads a file', 42))
+  const built = buildCatalog([{ name: 'read', description: 'reads a file' }], { query: 42 })
+  assert.equal(built.shown, 1)
+})
+
+test('a JSON Schema wrapper without type:object is still read as a wrapper', () => {
+  const wrapped = {
+    properties: {
+      path: { type: 'string' },
+      recursive: { type: 'boolean' },
+    },
+    required: ['path'],
+  }
+  assert.equal(parameterSignature(wrapped), 'path:str, recursive?:bool')
+})
+
+test('estimateTokens prices Hangul as CJK, not as ASCII', () => {
+  assert.equal(estimateTokens('한국어'), 3)
+  assert.ok(estimateTokens('한국어') > '한국어'.length / 4)
+})
+
+test('group labels keep their separator, so different families do not collapse', () => {
+  const entries = [
+    { name: 'mcp_alpha_tool', description: 'Alpha.' },
+    { name: 'mcp.beta_tool', description: 'Beta.' },
+  ]
+  const grouped = buildTieredCatalog(entries, { budgetChars: 24 })
+  assert.equal(grouped.tier, 3)
+  assert.ok(grouped.text.includes('- mcp_* (1)'), grouped.text)
+  assert.ok(grouped.text.includes('- mcp.* (1)'), grouped.text)
+})

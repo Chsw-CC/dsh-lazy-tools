@@ -11,6 +11,7 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
 
 ```
 常驻（原生、直调）：read  write  edit  apply_patch  glob  grep  bash  todo_write
+                     PTC 组合存在 run_code 时也常驻
 按需（一个入口）  ：mcp 集成、媒体、网络、一次性插件工具 ……
 ```
 
@@ -41,6 +42,19 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
 
 短会话（1–2 轮）里本插件未必划算：工具箱自身约 400 token，要摊到后续请求上才回本。
 工具多的长期会话才是目标场景。
+
+## 0.3.2 审查修复
+
+第二轮审查只修契约、检索与重复计算，不新增可见面：
+
+- **`skills: false` 真正关闭技能**：以前只隐藏目录，`skill` 动作仍能加载正文；现在动作明确拒绝，系统提示里的技能行也一并省略。
+- **PTC 组合下的 `run_code` 常驻**：默认工作集补上 `run_code`，有该工具的 PTC 组合不再先绕一次工具箱；没有该名字的部署自动跳过。
+- **`list` 的 query 检索完整描述**：以前只匹配 96 字符的显示摘要，描述后半段命中的工具会被误报为不存在。
+- **无 `type:"object"` 的 JSON Schema 包装**：只有 `properties` + `required` 也能正确读出签名；真正的 `properties` 参数不会被误判成包装。
+- **签名按注册表代次缓存**：重复 `list` 不再为每个工具重新投影 schema；`tools/change` 会清空 `schema` 块缓存，原地改定义也不会返回旧块。
+- **`plugins` 只有一份总预算**：四个方法 × 三个服务不再各自等 1.5 秒（最坏约 18 秒）；超时即停、拒绝换下一个方法、非数组形状继续探测而不是误报 0 个插件。
+- **输入容错**：非字符串 `query` 不再让目录崩溃；`schema` 会去空白、去重、忽略非字符串名字；空白 `tool` 在查找前拒绝；分组标签保留分隔符（`mcp_*` 与 `mcp.*` 不再合并）。
+- **token 估算纳入韩文**：韩文音节按 CJK 计价，不再当成 ASCII。
 
 ## 0.3.1 可靠性修复
 
@@ -83,6 +97,7 @@ pnpm add link:<本目录绝对路径>
       - grep
       - bash
       - todo_write
+      - run_code                 # PTC 组合存在时；普通组合自动跳过
     # eager: false              # 全部收进工具箱，只留工具箱一张 schema
     catalogDescriptionChars: 96  # 目录每行摘要长度
     catalogTokenBudget: 1200     # 一次 list 的估计 token 上限（CJK 感知）；超了自动降级
@@ -100,7 +115,7 @@ pnpm add link:<本目录绝对路径>
 | `list` | `query?` | 工具名 + 参数签名 + 一行摘要；技能目录 |
 | `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 |
 | `call` | `tool`, `arguments` | 走完整策略管线执行该工具；失败时附参数表 |
-| `skill` | `skill` | 该技能的完整说明正文 |
+| `skill` | `skill` | 该技能的完整说明正文（`skills:false` 时禁用） |
 | `plugins` | — | 已安装插件清单（名称 + 启用状态） |
 
 ## 行为边界
@@ -111,7 +126,7 @@ pnpm add link:<本目录绝对路径>
 - **只装一次**：可见面在会话内安装一次后不再改写，提示前缀稳定。
 - **技能目录**：系统提示里的 `<available_skills>` 仍由 `@deepseek-ai/dsh-tool-skill` 注入；
   本插件只把技能**正文**改为按需加载。要压目录本身，调它的 `catalogDescriptionMaxLength`。
-- **PTC 模式**：在 PTC（`run_code`）组合下同样生效——SDK 只列常驻工具与工具箱。
+- **PTC 模式**：在 PTC（`run_code`）组合下同样生效——`run_code` 与常驻工具一起原生可见，SDK 只列常驻工具与工具箱。
 - **approval**：`call` 会触发与该工具直调完全相同的审批流程，不会被静默绕过。
 - **不裁剪真实结果**：`call` 与 `skill` 返回原文；只有 `list`/`schema`/`plugins` 有字符预算。
 - **递归护栏**：工具箱嵌套调用最多 6 层。
@@ -119,7 +134,7 @@ pnpm add link:<本目录绝对路径>
 ## 开发
 
 ```bash
-bun test tests/                     # 34 个用例：目录格式化 + 装配/收窄/分发/自纠错
+bun test tests/                     # 48 个用例：目录格式化 + 装配/收窄/分发/自纠错
 node scripts/measure-first-call.mjs # 40 工具模拟 profile：常驻/目录/窄查询的 token 实测
 ```
 

@@ -5,8 +5,9 @@ export interface Config {
   toolName?: string
   /**
    * Tools that stay eager and native beside the toolbox. `*` is the only wildcard.
-   * Defaults to the core set (read, write, edit, apply_patch, glob, grep, bash, todo_write)
-   * filtered to what the registry actually provides. Pass false to defer everything.
+   * Defaults to the core set (read, write, edit, apply_patch, glob, grep, bash, todo_write),
+   * plus run_code when the PTC composition provides it, filtered to what the registry actually provides.
+   * Pass false to defer everything.
    */
   eager?: string[] | false
   /** The earlier name for `eager`; both are read. */
