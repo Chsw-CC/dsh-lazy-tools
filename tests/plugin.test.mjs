@@ -23,11 +23,14 @@ let definitions = liveDefinitions()
 
 mock.module('@deepseek-ai/dsh-tools', () => ({
   defineTool: definition => definition,
-  projectToolSchema: definition => ({
-    name: definition.name,
-    description: definition.description,
-    parameters: definition.parameters,
-  }),
+  projectToolSchema: definition => {
+    globalThis.__projectCalls = (globalThis.__projectCalls ?? 0) + 1
+    return {
+      name: definition.name,
+      description: definition.description,
+      parameters: definition.parameters,
+    }
+  },
   RUN_CODE_NAME: 'run_code',
   ToolNotFoundError: class ToolNotFoundError extends Error {},
 }))
@@ -334,4 +337,123 @@ test('the tool and skill catalogs share one token budget', async () => {
   const skills = result.text.split('Skills (')[1] ?? ''
   assert.ok(skills.startsWith('30):'), 'the skills section is present and counted: ' + result.text)
   assert.equal(skills.includes('skill_0'), false, 'no skill row is rendered past the shared budget')
+})
+
+test('run_code stays eager in PTC compositions that provide it', () => {
+  const agent = makeAgent()
+  const toolbox = mount()
+  definitions = [...definitions, { name: 'run_code', description: 'Run code.', parameters: { code: { type: 'string', required: true } } }]
+  handlers.get('tools/change')?.()
+  step(agent)
+  assert.deepEqual(restricted[0].allow, ['toolbox', 'read', 'bash', 'run_code'])
+})
+
+test('skills:false disables the skill action and its guide line', async () => {
+  const toolbox = mount({ skills: false })
+  assert.equal(toolbox.parameters.action.enum.includes('skill'), false, 'the disabled action is not advertised')
+  const listing = await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  assert.equal(listing.text.includes('Skills ('), false, 'the skill catalog is omitted')
+  assert.equal(sections[0].text.includes('action:"skill"'), false, 'the guide does not advertise a disabled action')
+  await assert.rejects(
+    () => toolbox.execute({ action: 'skill', skill: 'pdf' }, makeExec(undefined)),
+    /disabled by "skills: false"/,
+  )
+})
+
+test('list projects signatures once per registry generation', async () => {
+  const toolbox = mount()
+  globalThis.__projectCalls = 0
+  await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  const first = globalThis.__projectCalls
+  assert.ok(first > 0)
+  await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  assert.equal(globalThis.__projectCalls, first, 'a repeated listing reuses cached rows and signatures')
+
+  definitions = liveDefinitions().map(definition => definition.name === 'read'
+    ? { ...definition, parameters: { ...definition.parameters, encoding: { type: 'string' } } }
+    : definition)
+  handlers.get('tools/change')?.()
+  globalThis.__projectCalls = 0
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
+  assert.ok(result.text.includes('encoding?:str'), 'a registry change invalidates the cached signatures: ' + result.text)
+  assert.ok(globalThis.__projectCalls > 0)
+})
+
+test('schema cleans names and answers each tool once', async () => {
+  const toolbox = mount()
+  assert.equal(toolbox.parameters.tools.type, 'json', 'a singular string must pass argument validation')
+  const result = await toolbox.execute(
+    { action: 'schema', tools: ['read', ' read ', 7, 'read'] },
+    makeExec(undefined),
+  )
+  assert.equal(result.ok, true)
+  assert.equal((result.text.match(/"name": "read"/g) ?? []).length, 1, 'the duplicate is not rendered twice')
+
+  const singular = await toolbox.execute({ action: 'schema', tools: 'read' }, makeExec(undefined))
+  assert.equal(singular.ok, true, 'a one-name string is accepted too')
+  assert.ok(singular.text.includes('"name": "read"'))
+})
+
+test('skill names tolerate surrounding whitespace', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'skills'
+    ? { list: async () => [], get: async name => ({ content: 'body of ' + name }) }
+    : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'skill', skill: ' pdf ' }, makeExec(undefined))
+  assert.equal(result.text, 'body of pdf')
+})
+
+test('a tools/change clears a schema block cached for an in-place update', async () => {
+  const toolbox = mount()
+  const before = await toolbox.execute({ action: 'schema', tools: ['read'] }, makeExec(undefined))
+  assert.ok(before.text.includes('Read a text file'), before.text)
+
+  const read = definitions.find(definition => definition.name === 'read')
+  read.description = 'Updated read description.'
+  handlers.get('tools/change')?.()
+  const after = await toolbox.execute({ action: 'schema', tools: ['read'] }, makeExec(undefined))
+  assert.ok(after.text.includes('Updated read description.'), after.text)
+  assert.equal(after.text.includes('Read a text file'), false)
+})
+
+test('a blank tool name is rejected before a registry lookup', async () => {
+  const toolbox = mount()
+  await assert.rejects(
+    () => toolbox.execute({ action: 'call', tool: '   ', arguments: {} }, makeExec(undefined)),
+    /requires "tool"/,
+  )
+})
+
+test('plugins stops probing once its total inventory budget is spent', async () => {
+  const ctx = makeContext()
+  const hang = () => new Promise(() => {})
+  ctx.get = key => (key === 'pluginInventory'
+    ? { listBundles: hang, list: hang, bundles: hang, entries: hang }
+    : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const toolbox = registered.at(-1)
+  const started = Date.now()
+  const result = await toolbox.execute({ action: 'plugins' }, makeExec(undefined))
+  const elapsed = Date.now() - started
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('Installed plugins (0)'), result.text)
+  assert.ok(elapsed >= 1400, 'the single deadline was actually exercised')
+  assert.ok(elapsed < 3000, 'four hanging methods cannot multiply the deadline: ' + elapsed + 'ms')
+})
+
+test('plugins skips a non-array service shape and tries the next method', async () => {
+  const ctx = makeContext()
+  ctx.get = key => (key === 'pluginInventory'
+    ? { listBundles: async () => ({}), list: async () => [{ name: 'real-plugin' }] }
+    : undefined)
+  registered.length = 0
+  apply(ctx, {})
+  const toolbox = registered.at(-1)
+  const result = await toolbox.execute({ action: 'plugins' }, makeExec(undefined))
+  assert.ok(result.text.includes('from pluginInventory.list'), result.text)
+  assert.ok(result.text.includes('- real-plugin [on]'), result.text)
 })
