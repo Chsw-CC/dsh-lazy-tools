@@ -1,6 +1,6 @@
 {
   "name": "dsh-lazy-tools",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "按需加载工具与技能：用一个 toolbox 入口替代常驻的全部工具 schema，显著降低上下文与 token 占用。",
   "license": "MIT",
   "type": "module",
@@ -27,6 +27,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

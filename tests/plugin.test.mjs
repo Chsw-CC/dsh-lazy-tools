@@ -24,8 +24,12 @@ mock.module('@deepseek-ai/dsh-tools/pipeline', () => ({
   ToolExecutionPipeline: class ToolExecutionPipeline {
     constructor(ctx, source) { this.source = source }
     async prepare(input) { prepared.push(input); return { kind: 'dispatch', exec: { token: input.token ?? 'x' } } }
-    async dispatch() { return { kind: 'post-result', result: { content: [], isError: false } } }
+    async dispatch() {
+      if (typeof globalThis.__reenter === 'function') await globalThis.__reenter()
+      return { kind: 'post-result', result: { content: [], isError: false } }
+    }
     async complete(_exec, outcome) {
+      if (globalThis.__nestedText !== undefined) return { isError: false, content: [{ type: 'text', text: globalThis.__nestedText }] }
       if (outcome.kind === 'post-result') return { isError: false, content: [{ type: 'text', text: 'nested ok' }] }
       return { isError: false, content: [{ type: 'text', text: 'nested ok' }] }
     }
@@ -203,5 +207,85 @@ test('plugins falls back to the tool registry when no inventory service exists',
   const result = await toolboxForTests().execute({ action: 'plugins' }, makeExec(undefined))
   assert.equal(result.ok, true)
   assert.ok(result.text.includes('Installed plugins (0)'))
-  assert.ok(result.text.includes('Loaded tools: 3'))
+  assert.ok(result.text.includes('Loaded tools: 2'), 'the toolbox itself is not counted')
+})
+
+test('the definition index is built once and invalidated by tools/change', async () => {
+  let builds = 0
+  const ctx = makeContext()
+  const definitions = ctx.tools.definitions
+  ctx.tools.definitions = (...args) => { builds++; return definitions(...args) }
+  registered.length = 0
+  apply(ctx, {})
+  const tool = registered.at(-1)
+  await tool.execute({ action: 'list' }, makeExec(undefined))
+  await tool.execute({ action: 'list' }, makeExec(undefined))
+  assert.equal(builds, 1, 'the second list reuses the cached index')
+  handlers.get('tools/change')?.()
+  await tool.execute({ action: 'list' }, makeExec(undefined))
+  assert.equal(builds, 2, 'a registry change invalidates the cache')
+})
+
+test('a failed restrict keeps the previous restriction alive instead of over-exposing', async () => {
+  let throwOnce = false
+  let disposed = 0
+  const agent = {
+    id: 'agent-atomic',
+    ctx: {
+      tools: {
+        restrict: () => {
+          if (throwOnce) { throwOnce = false; throw new Error('scope is gone') }
+          return () => { disposed++ }
+        },
+      },
+    },
+  }
+  installForTests(agent)
+  const tool = toolboxForTests()
+  await tool.execute({ action: 'use', tools: ['read_file'] }, makeExec(agent))
+  assert.equal(disposed, 1)
+
+  throwOnce = true
+  const failed = await tool.execute({ action: 'use', tools: ['apply_patch'] }, makeExec(agent))
+  assert.equal(failed.ok, false)
+  assert.ok(failed.text.includes('cannot update the visible tool set'))
+  assert.equal(disposed, 1, 'the surviving restriction was not released by the failed call')
+})
+
+test('releasing when nothing was promoted does not touch the registry', async () => {
+  let restricts = 0
+  const agent = { id: 'agent-noop', ctx: { tools: { restrict: () => { restricts++; return () => {} } } } }
+  installForTests(agent)
+  const before = restricts
+  const result = await toolboxForTests().execute({ action: 'release' }, makeExec(agent))
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('no tool was promoted'))
+  assert.equal(restricts, before, 'a no-op release installs nothing')
+})
+
+test('a large nested payload is returned whole, not clipped', async () => {
+  const payload = 'x'.repeat(40000)
+  globalThis.__nestedText = payload
+  try {
+    const result = await toolboxForTests().execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(undefined))
+    assert.equal(result.ok, true)
+    assert.equal(result.text.length, 40000)
+  } finally {
+    delete globalThis.__nestedText
+  }
+})
+
+test('a tool that calls back into the toolbox hits the nesting guard', async () => {
+  const agent = { id: 'agent-recursive', ctx: { tools: { restrict: () => () => {} } } }
+  installForTests(agent)
+  const tool = toolboxForTests()
+  globalThis.__reenter = () => tool.execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(agent))
+  try {
+    await assert.rejects(
+      () => tool.execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(agent)),
+      /nesting limit reached/,
+    )
+  } finally {
+    delete globalThis.__reenter
+  }
 })
