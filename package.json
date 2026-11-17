@@ -1,7 +1,7 @@
 {
   "name": "dsh-lazy-tools",
   "version": "0.4.0",
-  "description": "按需加载工具与技能：用一个 toolbox 入口替代常驻的全部工具 schema，显著降低上下文与 token 占用。",
+  "description": "按需加载工具：核心工具保持原生可见，长尾工具收进一个 toolbox 入口，显著降低每次请求的上下文与 token 占用。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
