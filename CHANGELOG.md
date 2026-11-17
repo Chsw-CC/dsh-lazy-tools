@@ -32,7 +32,7 @@ is `run_code` joining the eager set in PTC compositions that provide it.
 - **The token estimator includes Hangul**, so Korean catalogs are no longer priced as
   ASCII.
 
-50 tests; CI runs the suite plus the first-call measurement.
+51 tests; CI runs the suite plus the first-call measurement.
 
 ## 0.3.1
 

@@ -181,6 +181,15 @@ test('a wrapper keeps valid schema metadata such as $id', () => {
   assert.equal(parameterSignature(wrapped), 'path:str')
 })
 
+test('instance-valued schema metadata is not mistaken for a parameter descriptor', () => {
+  const wrapped = {
+    properties: { path: { type: 'string' } },
+    required: ['path'],
+    default: { path: 'a', type: 'string' },
+  }
+  assert.equal(parameterSignature(wrapped), 'path:str')
+})
+
 test('a direct parameter named properties is not mistaken for a wrapper', () => {
   assert.equal(parameterSignature({ properties: { type: 'string' } }), 'properties?:str')
   assert.equal(parameterSignature({ properties: { type: 'object', properties: { inner: { type: 'string' } } } }), 'properties?:obj')

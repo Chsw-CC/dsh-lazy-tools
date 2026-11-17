@@ -134,7 +134,7 @@ pnpm add link:<本目录绝对路径>
 ## 开发
 
 ```bash
-bun test tests/                     # 50 个用例：目录格式化 + 装配/收窄/分发/自纠错
+bun test tests/                     # 51 个用例：目录格式化 + 装配/收窄/分发/自纠错
 node scripts/measure-first-call.mjs # 40 工具模拟 profile：常驻/目录/窄查询的 token 实测
 ```
 
