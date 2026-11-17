@@ -22,6 +22,8 @@ DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提�
 2. **长尾收窄**：插件为每个 agent 调一次 `ctx.tools.restrict({ allow: ['toolbox', ...eager] })`，
    这是注册表自带的按 agent 收窄接口，提示装配、会话回放与 UI 呈现都保持一致。
 3. **目录带签名**：`{action:"list"}` 给出 `read(path:str, offset?:int)` 这样的**带类型参数签名**，不只是散文描述。
+   预算不够时**先截短签名、再降成前缀计数**：`ego_click(selector:str, …)` 仍然可以直接调，
+   而 `ego_*`（37 个）不能——降级顺序按"还能不能调用"排，不按"省不省字符"排。
    短枚举直接写在签名里（`action:"list|call"`），签名通常已经够直接调用，`{action:"schema"}` 只留给签名不够的场合。
 4. **不绕过策略**：`{action:"call"}` 通过插件自己的 `ToolExecutionPipeline` 重放调用，
    审批、guard、超时、post-execute 策略与结果渲染全部照常生效。

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0
+
+A listing exists to be called from. Version 0.3.x degraded a large catalog straight
+from "names with signatures" to "name prefixes with counts", which is cheap to render
+and useless to act on: `ego_* (37)` tells a model that 37 tools exist and nothing about
+which one to call, so the next request is a `query` and the one after that is the call.
+The band that used to be skipped is now where most real catalogs land.
+
+- **Signatures are clipped before they are dropped.** The names tier tries the full
+  signature, then 64, 32 and 16 characters, then no signature at all, and only then
+  collapses to prefix groups. `ego_click(selector:str, x?:num, …)` is enough to call;
+  `ego_* (37)` is not.
+- **Clipping keeps whole parameters.** A signature is never cut mid-name, and the
+  `…` tail marks a clip so a shortened signature cannot read as a complete one.
+- **Measured on a 105-tool profile shape:** the default 1200-token budget now renders
+  every tool with a usable signature (1068 tokens, tier 2) where 0.3.2 produced 31
+  prefix lines. Triple the budget keeps five parameters per tool instead of two.
+
+Tests 51 -> 53.
+
 ## 0.3.2
 
 Second review pass: close configuration and contract gaps, make search see the whole

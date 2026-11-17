@@ -210,3 +210,46 @@ test('group labels keep their separator, so different families do not collapse',
   assert.ok(grouped.text.includes('- mcp_* (1)'), grouped.text)
   assert.ok(grouped.text.includes('- mcp.* (1)'), grouped.text)
 })
+
+test('a signature is clipped before the listing collapses to prefix groups', () => {
+  // Shapes taken from a real 105-tool profile: long signatures are what push a
+  // full catalog past its budget, and prefix groups are what a model cannot call.
+  const entries = []
+  for (let index = 0; index < 30; index++) {
+    entries.push({
+      name: 'ego_tool_' + String(index).padStart(2, '0'),
+      description: 'Drives one browser action with a long parameter list.',
+      signature: 'selector:str, x?:num, y?:num, space?:str, snapshotId?:str, double?:bool, touch?:bool, holdMs?:num',
+    })
+  }
+
+  const grouped = buildTieredCatalog(entries, { budgetTokens: 60 })
+  // Whatever the budget forces, a rendered tier must fit it.
+  assert.ok(estimateTokens(grouped.text) <= 60 || grouped.text.startsWith('…[+'), grouped.text.slice(0, 200))
+
+  // With room for names but not full signatures, every line stays callable.
+  const clipped = buildTieredCatalog(entries, { budgetTokens: 400 })
+  assert.equal(clipped.tier, 2)
+  assert.ok(clipped.text.includes('ego_tool_00(selector:str'), clipped.text.slice(0, 200))
+  assert.ok(clipped.text.includes('…'), 'a clipped signature says it was clipped')
+  assert.ok(!clipped.text.includes('ego_*'), 'names survive; prefix groups are the last resort')
+  assert.equal(clipped.shown, 30)
+})
+
+test('a clipped signature never splits a parameter in half', () => {
+  const entries = [{
+    name: 'wide',
+    description: 'Wide.',
+    signature: 'alpha:str, bravo:num, charlie:bool, delta:str, echo:num',
+  }]
+  for (const budgetTokens of [200, 120, 90, 70, 60, 50, 40, 30]) {
+    const rendered = buildTieredCatalog(entries, { budgetTokens })
+    if (!rendered.text.includes('wide(')) continue
+    const inner = rendered.text.slice(rendered.text.indexOf('wide(') + 5, rendered.text.lastIndexOf(')'))
+    for (const part of inner.split(', ')) {
+      if (part === '…') continue
+      assert.ok(/^(alpha|bravo|charlie|delta|echo):/.test(part), 'whole parameters only, got: ' + part)
+    }
+  }
+})
+
