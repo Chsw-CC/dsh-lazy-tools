@@ -1,25 +1,46 @@
 # dsh-lazy-tools
 
-按需加载工具与技能的 DSH 插件：把「每个工具一份 JSON schema 常驻系统提示」换成**一个** `toolbox` 入口。
+按需加载工具与技能的 DSH 插件：保留一小份**常驻**核心工具，把其余能力收进一个 `toolbox` 入口。
 
 ## 它解决什么
 
-DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提示越长——即使这一轮只用得上其中一两个。
-这个插件让模型先看到一份紧凑目录，按需取 schema、按需调用：
+DSH 会把每个可见工具的 schema 注入每次请求。工具越多，提示越长，即使这一轮只用得上一两个。
+
+但「全藏起来」不是解法：模型不会多问一次，它会**绕路**——起一个 shell、写个脚本、或者猜。
+一次绕路是好几轮请求，而它省下的那行 schema 是几十个 token。所以本插件只藏长尾：
 
 ```
-before:  read(1200 tok) + write(900) + bash(1500) + edit(1100) + web(800) + …  ≈ 每条请求都付
-after:   toolbox(约 400 tok) + 目录（按需） + 实际用到的 schema（按需）
+常驻（原生、直调）：read  write  edit  apply_patch  glob  grep  bash  todo_write
+按需（一个入口）  ：mcp 集成、媒体、网络、一次性插件工具 ……
 ```
 
 ## 工作机制
 
-1. **窄化视图**：插件为每个 agent 调用 `ctx.tools.restrict({ allow: ['toolbox', ...keep] })`，
-   这是注册表自带的按 agent 收窄接口，因此提示装配、会话回放与 UI 呈现都保持一致。
-2. **按需读取**：`{action:"list"}` 给出工具与技能的名称加一行摘要；
-   `{action:"schema"}` 只取真正要用的那几个 schema；`{action:"skill"}` 读取技能正文。
-3. **不绕过策略**：`{action:"call"}` 通过插件自己的 `ToolExecutionPipeline` 重放调用，
+1. **核心工具 eager**：上表那些工具保持原生可见，直接调用，不经过工具箱。
+   它们覆盖了绝大多数任务的第一个动作，所以通常不存在「首次工具调用」的额外成本。
+2. **长尾收窄**：插件为每个 agent 调一次 `ctx.tools.restrict({ allow: ['toolbox', ...eager] })`，
+   这是注册表自带的按 agent 收窄接口，提示装配、会话回放与 UI 呈现都保持一致。
+3. **目录带签名**：`{action:"list"}` 给出 `read(path, offset?)` 这样的**参数签名**，不只是散文描述。
+   签名通常已经够直接调用，`{action:"schema"}` 只留给签名不够的场合。
+4. **不绕过策略**：`{action:"call"}` 通过插件自己的 `ToolExecutionPipeline` 重放调用，
    审批、guard、超时、post-execute 策略与结果渲染全部照常生效。
+
+5. **失败即带 schema**：`call` 被拒时，答案里附上该工具的参数表（超过 3000 字符就不附），
+   模型在同一轮里改正重试。
+6. **未知工具给近似项**：拼错时返回最接近的三个名字，而不是让模型回到 `list` 从头找。
+
+## 稳定性取舍
+
+这是一个降低 token 占用的插件，但第一目标是**不改变会话行为**。因此三处主动放弃优化：
+
+| 放弃的 | 换来的 |
+| --- | --- |
+| 按步骤动态裁剪可见工具 | 提示前缀字节稳定，上下文缓存不失效 |
+| 会话内提升/降级工具 | 同上；且模型不会被「先调工具再干活」带偏 |
+| 语义检索工具（BM25 / 向量） | 无额外依赖、无常驻索引、行为可预测 |
+
+短会话（1–2 轮）里本插件未必划算：工具箱自身约 400 token，要摊到后续请求上才回本。
+工具多的长期会话才是目标场景。
 
 ## 安装
 
@@ -37,70 +58,52 @@ pnpm add link:<本目录绝对路径>
 - id: dsh-lazy-tools
   config:
     toolName: toolbox            # 模型看到的工具名
-    keep: []                     # 始终可见、不进工具箱的工具名
+    eager:                       # 常驻原生、不进工具箱；支持通配符如 read_*
+      - read
+      - write
+      - edit
+      - apply_patch
+      - glob
+      - grep
+      - bash
+      - todo_write
+    # eager: false              # 全部收进工具箱，只留工具箱一张 schema
     catalogDescriptionChars: 96  # 目录每行摘要长度
-    catalogTokenBudget: 1200     # 一次 list 的 token 预算；超了自动降级（摘要 → 纯名称 → 前缀计数）
-    # keep 支持通配符：['read_*', 'todo_*'] 表示这一族核心工具始终 eager
+    catalogTokenBudget: 1200     # 一次 list 的 token 预算；超了自动降级
     hideOthers: true             # false = 只加工具箱、不收窄视图
-    skills: true                 # 目录里是否包含技能，并开放 {action:"skill"}
+    skills: true                 # 目录里是否包含技能，并开放 skill 动作
 ```
+
+`eager` 里注册表没有的名字会被自动跳过，所以同一份配置可以跨部署使用。
+`keep` 是 `eager` 的旧拼写，仍可读；`keep: false` 等价于 `eager: []`。
 
 ## 动作一览
 
 | action | 参数 | 结果 |
 | --- | --- | --- |
-| `list` | `query?` | 已加载工具与技能的名称 + 一行摘要 |
-| `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 schema |
-| `call` | `tool`, `arguments` | 走完整策略管线执行该工具 |
+| `list` | `query?` | 工具名 + 参数签名 + 一行摘要；技能目录 |
+| `schema` | `tools: string[]` | 这些工具的完整 JSON 参数 |
+| `call` | `tool`, `arguments` | 走完整策略管线执行该工具；失败时附参数表 |
 | `skill` | `skill` | 该技能的完整说明正文 |
 | `plugins` | — | 已安装插件清单（名称 + 启用状态） |
-| `use` | `tools: string[]` | 把这些工具提升为**本会话**常驻可见 |
-| `release` | `tools?: string[]` | 撤销提升（省略则全部撤销） |
-
-### 会话级提升
-
-`use` / `release` 直接替换该 agent 的 `restrict()` 结果（返回的 disposer 立即释放），
-所以可见集合永远是「工具箱 + 本会话点名要的工具」，不会层层堆叠。
-适合工具密集型任务：把 `read`、`bash` 这类真正反复用的提到常驻，其余继续按需。
-
-### 插件清单的来源
-
-`plugins` 依次尝试 `ctx.get('pluginInventory' | 'inventory' | 'pluginManager')` 上的
-`listBundles` / `list` / `bundles` / `entries`，把返回结构归一成「名称 + 启用状态」；
-若当前组合没有这些服务，则退回工具注册表并如实说明——**不会伪造清单**。
 
 ## 行为边界
 
-- **失败开放**：若工具箱自身未注册成功，插件不会收窄视图（否则 agent 会失去全部能力），并在下一步重试。
+- **失败开放**：工具箱自身未注册成功时，插件不收窄视图（否则 agent 会失去全部能力），下一步重试；
+  连续失败 3 次后保持全开，不再打扰注册表。
 - **仅模型可见面**：收窄作用于模型可见的工具集；工具本身仍注册在组合里，插件互不干扰。
-- **技能目录**：系统提示中的 `<available_skills>` 仍由 `@deepseek-ai/dsh-tool-skill` 注入；
-  若目录本身偏大，可调它的 `catalogDescriptionMaxLength`。本插件负责把技能**正文**改为按需加载。
-- **PTC 模式**：在 PTC（`run_code`）组合下同样生效——SDK 只列工具箱，其余工具经工具箱调用。
+- **只装一次**：可见面在会话内安装一次后不再改写，提示前缀稳定。
+- **技能目录**：系统提示里的 `<available_skills>` 仍由 `@deepseek-ai/dsh-tool-skill` 注入；
+  本插件只把技能**正文**改为按需加载。要压目录本身，调它的 `catalogDescriptionMaxLength`。
+- **PTC 模式**：在 PTC（`run_code`）组合下同样生效——SDK 只列常驻工具与工具箱。
 - **approval**：`call` 会触发与该工具直调完全相同的审批流程，不会被静默绕过。
 - **不裁剪真实结果**：`call` 与 `skill` 返回原文；只有 `list`/`schema`/`plugins` 有字符预算。
-- **原子替换**：新限制先装、旧限制后释放，替换失败时旧限制原样保留，不会出现「裸奔」窗口。
 - **递归护栏**：工具箱嵌套调用最多 6 层。
 
 ## 开发
 
 ```bash
-bun test tests/      # 24 个用例：目录格式化 + 装配/收窄/分发/提升 + 四条不变量
+bun test tests/      # 23 个用例：目录格式化 + 装配/收窄/分发/自纠错
 ```
 
 `lib/catalog.js` 是零依赖的纯函数，`lib/index.js` 只负责服务接线。
-
-## 同类插件
-
-同赛道里做得更早、也更完整的几个：
-
-- [everclear077/dsh-progressive-tools](https://github.com/everclear077/dsh-progressive-tools) — `stable-proxy`：固定请求面、目录留在内存、派发走普通管线；核心论点是工具列表必须字节稳定，否则缓存前缀失效。
-- [Letter2025/dsh-tool-search](https://github.com/Letter2025/dsh-tool-search) — Hermes 风格分层披露：0–3 四档，`tool_search`/`tool_describe`/`tool_call` 三件套，核心工具 eager。
-- [vibeinging/dsh-tool-search](https://github.com/vibeinging/dsh-tool-search) — 同样用 `ctx.tools.restrict()` 收窄，选中的工具持久化到会话事件，独立的父级过滤仍然优先。
-- [Imzl-zl/dsh-toolbox-ui](https://github.com/Imzl-zl/dsh-toolbox-ui) — 面向 MCP 的按服务器延迟加载（ToolSearch），默认关闭。
-- [Jesse-njx/dsh-skillport](https://github.com/Jesse-njx/dsh-skillport) — 技能侧的渐进披露索引，正文按需加载。
-- [menotbobbybrown/dsh-plugin-mcp](https://github.com/menotbobbybrown/dsh-plugin-mcp) — MCP 桥 + BM25 工具检索 + 动态 token 预算。
-
-本插件的差异：不做语义检索，也不替换执行器。可见面只留一个工具箱，其余靠注册表的
-`restrict()` 收窄；`call` 走自己的 `ToolExecutionPipeline`，因此审批与 guard 与直调一致。
-代价是每次 `use` 都会改可见列表——上面 dsh-progressive-tools 的论点直接命中这一点，
-所以结果里会明确写出缓存前缀失效。

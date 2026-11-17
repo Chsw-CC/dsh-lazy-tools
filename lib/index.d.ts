@@ -3,13 +3,19 @@
 export interface Config {
   /** Model-facing tool name (default "toolbox"). */
   toolName?: string
-  /** Tools that stay visible next to the toolbox. `*` is the only wildcard, e.g. `read_*`. */
-  keep?: string[]
+  /**
+   * Tools that stay eager and native beside the toolbox. `*` is the only wildcard.
+   * Defaults to the core set (read, write, edit, apply_patch, glob, grep, bash, todo_write)
+   * filtered to what the registry actually provides. Pass false to defer everything.
+   */
+  eager?: string[] | false
+  /** The earlier name for `eager`; both are read. */
+  keep?: string[] | false
   /** Characters of each description kept in a catalog line (default 96). */
   catalogDescriptionChars?: number
-  /** Token budget for one catalog listing; the listing degrades instead of overrunning it (default 1200). */
+  /** Token budget for one listing; the listing degrades instead of overrunning it (default 1200). */
   catalogTokenBudget?: number
-  /** Hide every other tool per agent (`false` only adds the toolbox and narrows nothing). */
+  /** Narrow the visible tool surface per agent (default true). */
   hideOthers?: boolean
   /** Include the skill catalog and the `skill` action (default true). */
   skills?: boolean

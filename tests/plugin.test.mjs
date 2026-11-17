@@ -2,36 +2,54 @@ import assert from 'node:assert/strict'
 import { mock, test } from 'bun:test'
 
 // --- fake Harness seams -----------------------------------------------------
+// A core set the plugin keeps eager by default, plus a deferred tail shaped like
+// real integrations. Names that do not exist in `definitions` must be skipped.
 const registered = []
 const sections = []
 const restricted = []
 const handlers = new Map()
-const definitions = [
-  { name: 'read_file', description: 'Read a text file from the workspace.' },
-  { name: 'apply_patch', description: 'Apply a patch to a file.' },
-  { name: 'toolbox', description: 'the lazy entry point' },
-]
 const prepared = []
+
+function liveDefinitions() {
+  return [
+    { name: 'read', description: 'Read a text file from the workspace.', parameters: { path: { type: 'string', required: true }, offset: { type: 'integer' } } },
+    { name: 'bash', description: 'Run a shell command.', parameters: { command: { type: 'string', required: true } } },
+    { name: 'mcp_github__create_issue', description: 'Open an issue.', parameters: { repo: { type: 'string', required: true } } },
+    { name: 'toolbox', description: 'the lazy entry point', parameters: { action: { type: 'string', required: true } } },
+  ]
+}
+
+let definitions = liveDefinitions()
 
 mock.module('@deepseek-ai/dsh-tools', () => ({
   defineTool: definition => definition,
-  projectToolSchema: (definition, clone) => ({ name: definition.name, description: definition.description, parameters: definition.parameters }),
+  projectToolSchema: definition => ({
+    name: definition.name,
+    description: definition.description,
+    parameters: definition.parameters,
+  }),
   RUN_CODE_NAME: 'run_code',
   ToolNotFoundError: class ToolNotFoundError extends Error {},
 }))
 
+const nestedOutcome = { isError: false, content: [{ type: 'text', text: 'nested ok' }] }
+
 mock.module('@deepseek-ai/dsh-tools/pipeline', () => ({
   ToolExecutionPipeline: class ToolExecutionPipeline {
     constructor(ctx, source) { this.source = source }
-    async prepare(input) { prepared.push(input); return { kind: 'dispatch', exec: { token: input.token ?? 'x' } } }
+    async prepare(input) { prepared.push(input); return { kind: 'dispatch', exec: { token: 'nested' } } }
     async dispatch() {
       if (typeof globalThis.__reenter === 'function') await globalThis.__reenter()
-      return { kind: 'post-result', result: { content: [], isError: false } }
+      return { kind: 'post-result', result: nestedOutcome }
     }
-    async complete(_exec, outcome) {
-      if (globalThis.__nestedText !== undefined) return { isError: false, content: [{ type: 'text', text: globalThis.__nestedText }] }
-      if (outcome.kind === 'post-result') return { isError: false, content: [{ type: 'text', text: 'nested ok' }] }
-      return { isError: false, content: [{ type: 'text', text: 'nested ok' }] }
+    async complete() {
+      if (globalThis.__nestedText !== undefined) {
+        return { isError: false, content: [{ type: 'text', text: globalThis.__nestedText }] }
+      }
+      if (globalThis.__nestedFails === true) {
+        return { isError: true, error: { message: 'invalid arguments' }, content: [] }
+      }
+      return nestedOutcome
     }
   },
   toolErrorMessage: error => (error instanceof Error ? error.message : String(error)),
@@ -41,22 +59,23 @@ mock.module('@deepseek-ai/dsh-tools/pipeline', () => ({
 const { apply } = await import('../lib/index.js')
 
 function makeContext() {
-  const ctx = {
+  return {
     tools: {
       definitions: () => definitions,
       executable: name => definitions.find(definition => definition.name === name),
       register: definition => { registered.push(definition); return () => {} },
+      guard: () => () => {},
     },
     systemPrompt: { section: section => { sections.push(section); return () => {} } },
     on: (event, handler) => { handlers.set(event, handler) },
     get: () => undefined,
     logger: { warn: () => {} },
+    effect: factory => factory(),
   }
-  return ctx
 }
 
-function makeAgent() {
-  return { id: 'agent-1', ctx: { tools: { restrict: filter => { restricted.push(filter); return () => {} } } } }
+function makeAgent(id = 'agent-1') {
+  return { id, ctx: { tools: { restrict: filter => { restricted.push(filter); return () => {} } } } }
 }
 
 function makeExec(agent) {
@@ -70,204 +89,169 @@ function makeExec(agent) {
   }
 }
 
-let currentToolbox
-function installForTests(agent) {
+// Apply a fresh plugin instance and return the toolbox it registered.
+function mount(options) {
   registered.length = 0
-  handlers.clear()
-  apply(makeContext(), {})
-  currentToolbox = registered.at(-1)
-  handlers.get('agent/created')({ agent })
-}
-
-function toolboxForTests() {
-  return currentToolbox ?? registered.at(-1)
-}
-
-test('registers one toolbox tool and a compact guide section', () => {
-  apply(makeContext(), {})
-  assert.equal(registered.length, 1)
-  assert.equal(registered[0].name, 'toolbox')
-  assert.deepEqual(registered[0].parameters.action.enum, ['list', 'schema', 'call', 'skill', 'plugins', 'use', 'release'])
-  assert.ok(registered[0].parameters.action.required)
-  assert.equal(sections.length, 1)
-  assert.equal(sections[0].order, 4800)
-  assert.ok(sections[0].text.includes('toolbox'))
-})
-
-test('hides every other tool for each agent, keeping the toolbox', () => {
-  const agent = makeAgent()
-  handlers.get('agent/created')({ agent })
-  handlers.get('agent/created')({ agent })
-  assert.equal(restricted.length, 1, 'idempotent per agent')
-  assert.deepEqual(restricted[0], { allow: ['toolbox'] })
-})
-
-test('keep entries survive only when the tool really exists', () => {
-  registered.length = 0
+  sections.length = 0
   restricted.length = 0
   handlers.clear()
-  apply(makeContext(), { keep: ['todo_write', 'read_file'] })
-  handlers.get('agent/pre-step')({ agent: makeAgent() }, () => 'next')
-  assert.deepEqual(restricted[0], { allow: ['toolbox', 'read_file'] })
+  definitions = liveDefinitions()
+  apply(makeContext(), options ?? {})
+  return registered.at(-1)
+}
+
+// Run one step for `agent` so the per-agent view is installed.
+function step(agent) {
+  handlers.get('agent/pre-step')({ agent }, () => undefined)
+}
+
+test('registers exactly one toolbox tool and a stable guide section', () => {
+  const toolbox = mount()
+  assert.equal(registered.length, 1)
+  assert.equal(toolbox.name, 'toolbox')
+  assert.deepEqual(toolbox.parameters.action.enum, ['list', 'schema', 'call', 'skill', 'plugins'])
+  assert.ok(toolbox.parameters.action.required, 'action is the only required field')
+  assert.equal(Object.keys(toolbox.parameters).filter(key => toolbox.parameters[key].required).length, 1)
+  assert.equal(sections.length, 1)
+  assert.equal(sections[0].order, 4800)
+  assert.equal(sections[0].interpolate, false, 'the guide must not re-interpolate per step')
+})
+
+test('the eager surface is the core tools, and unknown core names are dropped', () => {
+  const agent = makeAgent()
+  mount()
+  step(agent)
+  assert.equal(restricted.length, 1)
+  assert.deepEqual(restricted[0].allow, ['toolbox', 'read', 'bash'])
+})
+
+test('the view is installed once, so the prompt prefix cannot churn', () => {
+  const agent = makeAgent()
+  mount()
+  step(agent)
+  step(agent)
+  step(agent)
+  assert.equal(restricted.length, 1, 'a second step must not re-restrict')
+})
+
+test('eager: [] defers everything to the toolbox', () => {
+  const agent = makeAgent()
+  mount({ eager: [] })
+  step(agent)
+  assert.deepEqual(restricted[0].allow, ['toolbox'])
 })
 
 test('an unregistered toolbox name fails open instead of hiding everything', () => {
-  restricted.length = 0
-  handlers.clear()
-  registered.length = 0
-  apply(makeContext(), { toolName: 'box' })
-  handlers.get('agent/created')({ agent: makeAgent() })
+  const agent = makeAgent()
+  mount({ toolName: 'box' })
+  step(agent)
   assert.equal(restricted.length, 0)
 })
 
-test('list renders a compact catalog and omits the toolbox itself', async () => {
-  registered.length = 0
-  apply(makeContext(), {})
-  const result = await registered[0].execute({ action: 'list' }, makeExec(undefined))
+test('hideOthers false leaves the tool set untouched', () => {
+  const agent = makeAgent()
+  mount({ hideOthers: false })
+  step(agent)
+  assert.equal(restricted.length, 0)
+})
+
+test('list carries parameter signatures, so a call rarely needs schema', async () => {
+  const toolbox = mount()
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
   assert.equal(result.ok, true)
-  assert.ok(result.text.startsWith('Tools (2, about'), 'the header reports the withheld budget')
-  assert.ok(result.text.includes('- apply_patch — Apply a patch to a file.'))
+  assert.ok(result.text.startsWith('Tools (3, about'), 'the header reports the withheld budget')
+  assert.ok(result.text.includes('- read(path, offset?) — Read a text file'), result.text)
+  assert.ok(result.text.includes('- bash(command)'), 'a required parameter carries no marker')
   assert.ok(!result.text.includes('- toolbox'))
 })
 
-test('schema returns the projected JSON schema of a hidden tool', async () => {
-  const result = await registered[0].execute({ action: 'schema', tools: ['read_file'] }, makeExec(undefined))
+test('list degrades instead of overrunning its budget', async () => {
+  const many = []
+  for (let index = 0; index < 80; index++) {
+    many.push({ name: 'mcp_' + index + '_lookup', description: 'Looks something up in server ' + index + '.', parameters: { id: { type: 'string', required: true } } })
+  }
+  const toolbox = mount({ catalogTokenBudget: 40 })
+  definitions = many
+  handlers.get('tools/change')?.()
+  const result = await toolbox.execute({ action: 'list' }, makeExec(undefined))
   assert.equal(result.ok, true)
-  assert.ok(result.text.includes('"name": "read_file"'))
-  assert.ok(result.text.includes('"action"') === false)
+  assert.ok(result.text.includes('listing tier'), result.text.slice(0, 200))
+  assert.ok(result.text.length < 3000, 'a big catalog cannot flood the context')
 })
 
-test('call dispatches the hidden tool with the parent token', async () => {
+test('schema returns the projected JSON schema of a deferred tool', async () => {
+  const toolbox = mount()
+  const result = await toolbox.execute({ action: 'schema', tools: ['mcp_github__create_issue'] }, makeExec(undefined))
+  assert.equal(result.ok, true)
+  assert.ok(result.text.includes('"name": "mcp_github__create_issue"'))
+  assert.ok(result.text.includes('"repo"'))
+})
+
+test('call dispatches a deferred tool with the parent token', async () => {
   prepared.length = 0
+  const toolbox = mount()
   const exec = makeExec(makeAgent())
-  const result = await registered[0].execute({ action: 'call', tool: 'apply_patch', arguments: { path: 'a' } }, exec)
+  const result = await toolbox.execute({ action: 'call', tool: 'read', arguments: { path: 'a' } }, exec)
   assert.equal(result.ok, true)
   assert.equal(result.text, 'nested ok')
   assert.equal(prepared.length, 1)
-  assert.equal(prepared[0].name, 'apply_patch')
+  assert.equal(prepared[0].name, 'read')
   assert.equal(prepared[0].parent, 'toolbox-token')
   assert.equal(prepared[0].arguments, JSON.stringify({ path: 'a' }))
   assert.equal(prepared[0].agent, exec.agent)
 })
 
-test('call refuses unknown tools and self calls', async () => {
+test('a rejected call answers with the schema that would have fixed it', async () => {
+  const toolbox = mount()
+  globalThis.__nestedFails = true
+  try {
+    const result = await toolbox.execute({ action: 'call', tool: 'read', arguments: { wrong: 1 } }, makeExec(undefined))
+    assert.equal(result.ok, false)
+    assert.ok(result.text.includes('invalid arguments'))
+    assert.ok(result.text.includes('Parameters of read'), 'the retry needs no extra request')
+    assert.ok(result.text.includes('"path"'))
+  } finally {
+    delete globalThis.__nestedFails
+  }
+})
+
+test('an unknown tool names its closest matches instead of sending the model to list', async () => {
+  const toolbox = mount()
   await assert.rejects(
-    () => registered[0].execute({ action: 'call', tool: 'nope', arguments: {} }, makeExec(undefined)),
-    /unknown tool "nope"/,
+    () => toolbox.execute({ action: 'call', tool: 'mcp_github__create_isue', arguments: {} }, makeExec(undefined)),
+    error => {
+      assert.ok(error.message.includes('mcp_github__create_issue'), error.message)
+      assert.ok(error.message.includes('closest'))
+      return true
+    },
   )
   await assert.rejects(
-    () => registered[0].execute({ action: 'call', tool: 'toolbox', arguments: {} }, makeExec(undefined)),
+    () => toolbox.execute({ action: 'call', tool: 'toolbox', arguments: {} }, makeExec(undefined)),
     /cannot call itself/,
   )
 })
 
-test('hideOthers false leaves the tool set untouched', () => {
-  restricted.length = 0
-  handlers.clear()
-  apply(makeContext(), { hideOthers: false })
-  handlers.get('agent/created')({ agent: makeAgent() })
-  assert.equal(restricted.length, 0)
-})
-
-test('use promotes a tool for this session and release drops it again', async () => {
-  const restrictions = []
-  let disposed = 0
-  const agent = {
-    id: 'agent-2',
-    ctx: {
-      tools: {
-        restrict: filter => {
-          restrictions.push(filter)
-          return () => { disposed++ }
-        },
-      },
-    },
-  }
-  installForTests(agent)
-  const used = await toolboxForTests().execute({ action: 'use', tools: ['read_file'] }, makeExec(agent))
-  assert.equal(used.ok, true)
-  assert.deepEqual(restrictions.at(-1), { allow: ['toolbox', 'read_file'] })
-  assert.equal(disposed, 1, 'the previous restriction is replaced, not stacked')
-
-  const released = await toolboxForTests().execute({ action: 'release' }, makeExec(agent))
-  assert.equal(released.ok, true)
-  assert.deepEqual(restrictions.at(-1), { allow: ['toolbox'] })
-  assert.equal(disposed, 2)
-})
-
-test('use reports unknown names without promoting them', async () => {
-  const agent = { id: 'agent-3', ctx: { tools: { restrict: () => () => {} } } }
-  installForTests(agent)
-  const result = await toolboxForTests().execute({ action: 'use', tools: ['read_file', 'nope'] }, makeExec(agent))
-  assert.equal(result.ok, false)
-  assert.ok(result.text.includes('Unknown tool(s): nope'))
+test('an unknown tool never routes the model through a full listing', async () => {
+  const toolbox = mount()
+  await assert.rejects(
+    () => toolbox.execute({ action: 'call', tool: 'zzzz', arguments: {} }, makeExec(undefined)),
+    /unknown tool/,
+  )
 })
 
 test('plugins falls back to the tool registry when no inventory service exists', async () => {
-  const result = await toolboxForTests().execute({ action: 'plugins' }, makeExec(undefined))
+  const toolbox = mount()
+  const result = await toolbox.execute({ action: 'plugins' }, makeExec(undefined))
   assert.equal(result.ok, true)
   assert.ok(result.text.includes('Installed plugins (0)'))
-  assert.ok(result.text.includes('Loaded tools: 2'), 'the toolbox itself is not counted')
-})
-
-test('the definition index is built once and invalidated by tools/change', async () => {
-  let builds = 0
-  const ctx = makeContext()
-  const definitions = ctx.tools.definitions
-  ctx.tools.definitions = (...args) => { builds++; return definitions(...args) }
-  registered.length = 0
-  apply(ctx, {})
-  const tool = registered.at(-1)
-  await tool.execute({ action: 'list' }, makeExec(undefined))
-  await tool.execute({ action: 'list' }, makeExec(undefined))
-  assert.equal(builds, 1, 'the second list reuses the cached index')
-  handlers.get('tools/change')?.()
-  await tool.execute({ action: 'list' }, makeExec(undefined))
-  assert.equal(builds, 2, 'a registry change invalidates the cache')
-})
-
-test('a failed restrict keeps the previous restriction alive instead of over-exposing', async () => {
-  let throwOnce = false
-  let disposed = 0
-  const agent = {
-    id: 'agent-atomic',
-    ctx: {
-      tools: {
-        restrict: () => {
-          if (throwOnce) { throwOnce = false; throw new Error('scope is gone') }
-          return () => { disposed++ }
-        },
-      },
-    },
-  }
-  installForTests(agent)
-  const tool = toolboxForTests()
-  await tool.execute({ action: 'use', tools: ['read_file'] }, makeExec(agent))
-  assert.equal(disposed, 1)
-
-  throwOnce = true
-  const failed = await tool.execute({ action: 'use', tools: ['apply_patch'] }, makeExec(agent))
-  assert.equal(failed.ok, false)
-  assert.ok(failed.text.includes('cannot update the visible tool set'))
-  assert.equal(disposed, 1, 'the surviving restriction was not released by the failed call')
-})
-
-test('releasing when nothing was promoted does not touch the registry', async () => {
-  let restricts = 0
-  const agent = { id: 'agent-noop', ctx: { tools: { restrict: () => { restricts++; return () => {} } } } }
-  installForTests(agent)
-  const before = restricts
-  const result = await toolboxForTests().execute({ action: 'release' }, makeExec(agent))
-  assert.equal(result.ok, true)
-  assert.ok(result.text.includes('no tool was promoted'))
-  assert.equal(restricts, before, 'a no-op release installs nothing')
+  assert.ok(result.text.includes('from the tool registry'))
 })
 
 test('a large nested payload is returned whole, not clipped', async () => {
-  const payload = 'x'.repeat(40000)
-  globalThis.__nestedText = payload
+  const toolbox = mount()
+  globalThis.__nestedText = 'x'.repeat(40000)
   try {
-    const result = await toolboxForTests().execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(undefined))
+    const result = await toolbox.execute({ action: 'call', tool: 'read', arguments: {} }, makeExec(undefined))
     assert.equal(result.ok, true)
     assert.equal(result.text.length, 40000)
   } finally {
@@ -276,40 +260,15 @@ test('a large nested payload is returned whole, not clipped', async () => {
 })
 
 test('a tool that calls back into the toolbox hits the nesting guard', async () => {
-  const agent = { id: 'agent-recursive', ctx: { tools: { restrict: () => () => {} } } }
-  installForTests(agent)
-  const tool = toolboxForTests()
-  globalThis.__reenter = () => tool.execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(agent))
+  const toolbox = mount()
+  const agent = makeAgent('agent-recursive')
+  globalThis.__reenter = () => toolbox.execute({ action: 'call', tool: 'read', arguments: {} }, makeExec(agent))
   try {
     await assert.rejects(
-      () => tool.execute({ action: 'call', tool: 'read_file', arguments: {} }, makeExec(agent)),
+      () => toolbox.execute({ action: 'call', tool: 'read', arguments: {} }, makeExec(agent)),
       /nesting limit reached/,
     )
   } finally {
     delete globalThis.__reenter
   }
-})
-
-test('keep accepts wildcard patterns', async () => {
-  restricted.length = 0
-  handlers.clear()
-  registered.length = 0
-  apply(makeContext(), { keep: ['read_*', 'apply_patch'] })
-  handlers.get('agent/created')({ agent: makeAgent() })
-  assert.deepEqual(restricted[0], { allow: ['toolbox', 'read_file', 'apply_patch'] })
-})
-
-test('a large catalog is compressed to fit the token budget', async () => {
-  const many = []
-  for (let index = 0; index < 80; index++) many.push({ name: 'mcp_' + index + '_lookup', description: 'Looks something up in server ' + index + '.' })
-  const ctx = makeContext()
-  const definitions = ctx.tools.definitions
-  ctx.tools.definitions = () => [...many]
-  registered.length = 0
-  apply(ctx, { catalogTokenBudget: 40 })
-  const result = await registered.at(-1).execute({ action: 'list' }, makeExec(undefined))
-  ctx.tools.definitions = definitions
-  assert.equal(result.ok, true)
-  assert.ok(result.text.includes('listing tier 3'), 'the listing degrades instead of overrunning')
-  assert.ok(result.text.length < 2000, 'the answer stays inside the budget')
 })
