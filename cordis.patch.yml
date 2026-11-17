@@ -1,0 +1,6 @@
+# Register the lazy toolbox without touching any other profile entry.
+# The plugin hides the other tools per agent at runtime; nothing is removed
+# from the composition, so every plugin keeps its own settings.
+- insert:
+    - id: dsh-lazy-tools
+      name: dsh-lazy-tools
