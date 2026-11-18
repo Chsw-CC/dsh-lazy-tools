@@ -3,12 +3,12 @@
 ## 0.4.1
 
 Performance-only release: the rendered text, tier choice, and token count are unchanged.
-The listing path was spending most of its CPU on repeated work after 0.4.0 added the
+The listing path was spending most of its time on repeated work after 0.4.0 added the
 signature-clipping tiers.
 
-- **Token estimation is a code-unit loop instead of a regex per character.** An 8k ASCII
-  sample drops from roughly 229 µs to 23 µs (~10×); CJK, Hangul and surrogate pairs keep
-  the same count.
+- **Token estimation is a code-unit loop instead of a regex per character.** A
+  21,944-character mixed sample drops from roughly 229 µs to 23 µs (~10×); CJK, Hangul
+  and surrogate pairs keep the same count.
 - **A tier is measured once, not twice.** The accepted render passes its measured token
   count to `finish`, and the skills budget reuses `tools.estimatedTokens` instead of
   re-scanning the tool text.
