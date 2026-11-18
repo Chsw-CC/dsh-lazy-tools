@@ -16,6 +16,10 @@ signature-clipping tiers.
   of every rejected entry.
 - **Signature clipping is linear.** Both the signature builder and the clip loop keep a
   running length instead of joining a growing array for every parameter.
+- **A definition is projected once per generation.** Signatures, withheld-token
+  accounting and the `schema` action share one projected schema; a first `list` no
+  longer projects every tool twice. The cache is cleared on `tools/change`, just like
+  the signature rows and schema blocks.
 
 On the 105-tool shape, `buildTieredCatalog` at the default 1200-token budget falls from
 about 728 µs to 169–182 µs (≈4×); the 40-tool shape falls from about 206 µs to 52–57 µs
