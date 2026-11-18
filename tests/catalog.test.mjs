@@ -82,6 +82,21 @@ test('buildTieredCatalog degrades the listing instead of overrunning the budget'
   }
 })
 
+test('group fallback handles thousands of groups and keeps a callable prefix', () => {
+  const entries = []
+  for (let index = 0; index < 5000; index++) {
+    entries.push({ name: 'group' + String(index).padStart(4, '0') + '_tool', description: 'Tool ' + index })
+  }
+  const rendered = buildTieredCatalog(entries, { budgetTokens: 1200 })
+  assert.equal(rendered.tier, 3)
+  assert.equal(rendered.shown, 5000)
+  assert.equal(rendered.estimatedTokens, estimateTokens(rendered.text))
+  assert.ok(rendered.estimatedTokens <= 1200)
+  assert.equal(rendered.text.split('\n').length, 266, 'the fallback must retain 265 callable groups')
+  assert.ok(rendered.text.startsWith('- group0000_* (1)\n'))
+  assert.ok(rendered.text.endsWith('\n…[+4735 more groups]'))
+})
+
 
 // --- tokens, signatures, and the budget unit --------------------------------
 

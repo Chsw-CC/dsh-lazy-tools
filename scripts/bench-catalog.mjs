@@ -23,22 +23,36 @@ function profile(count, signature) {
   return entries
 }
 
-function bench(label, fn, iterations) {
-  for (let index = 0; index < 200; index++) fn()
+function bench(label, fn, iterations, warmup = 200) {
+  for (let index = 0; index < warmup; index++) fn()
   const start = performance.now()
   for (let index = 0; index < iterations; index++) fn()
   const elapsed = performance.now() - start
   console.log(label.padEnd(36), (elapsed / iterations * 1000).toFixed(1) + ' us/op')
 }
 
+function groupProfile(count) {
+  const entries = []
+  for (let index = 0; index < count; index++) {
+    entries.push({
+      name: 'group' + String(index).padStart(4, '0') + '_tool',
+      description: DESCRIPTION,
+      signature: SHORT_SIGNATURE,
+    })
+  }
+  return entries
+}
+
 const short = profile(40, SHORT_SIGNATURE)
 const long = profile(105, LONG_SIGNATURE)
+const manyGroups = groupProfile(5000)
 const sample = long.map(entry => '- ' + entry.name + '(' + entry.signature + ') — ' + entry.description).join('\n')
 
 bench('40 tools, 1200 tokens', () => buildTieredCatalog(short, { budgetTokens: 1200 }), 2000)
 bench('105 tools, 1200 tokens', () => buildTieredCatalog(long, { budgetTokens: 1200 }), 1000)
 bench('105 tools, 3000 tokens', () => buildTieredCatalog(long, { budgetTokens: 3000 }), 1000)
 bench('105 tools, 60 tokens', () => buildTieredCatalog(long, { budgetTokens: 60 }), 1000)
+bench('5000 groups, 1200 tokens', () => buildTieredCatalog(manyGroups, { budgetTokens: 1200 }), 5, 1)
 bench('estimateTokens, ' + sample.length + ' chars', () => estimateTokens(sample), 20000)
 
 for (const [label, entries] of [['40 tools', short], ['105 tools', long]]) {

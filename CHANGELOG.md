@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.2
+
+Reliability fix for the last-resort prefix-group tier. Rendering was correct, but the
+candidate loop rebuilt and re-tokenized every shorter prefix, so a very large catalog
+paid O(groups²) work in a single `list` call.
+
+- **Group fallback measures candidates from prefix sums.** The same descending
+  kept-count order is used, but each candidate is O(1) to evaluate; only the winning
+  text is joined. A synthetic 5,000-group catalog at the default 1200-token budget
+  drops from about 1.0 s to about 14–23 ms, with byte-identical output.
+- **Added a 5,000-group regression case** and a benchmark line, so the fallback remains
+  visible when the listing path changes.
+- **No token, tier, or output changes.** Differential fuzzing against the 0.4.0
+  formatter still produces identical text and token counts.
+
+Tests 55 -> 56.
+
 ## 0.4.1
 
 Performance-only release: the rendered text, tier choice, and token count are unchanged.
