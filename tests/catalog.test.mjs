@@ -253,3 +253,27 @@ test('a clipped signature never splits a parameter in half', () => {
   }
 })
 
+test('estimateTokens counts a surrogate pair once, as the code-point walk did', () => {
+  // The fast path works on UTF-16 code units; skipping the low half keeps the
+  // old `for...of` result for emoji and leaves non-BMP CJK on the ASCII rate.
+  assert.equal(estimateTokens('😀'), 1)
+  assert.equal(estimateTokens('a😀b'), 1)
+  assert.equal(estimateTokens('😀😀'), 1)
+  assert.equal(estimateTokens('中文😀'), 3)
+})
+
+test('every rendered tier reports the same count as a fresh measurement', () => {
+  const entries = []
+  for (let index = 0; index < 30; index++) {
+    entries.push({
+      name: 'ego_tool_' + String(index).padStart(2, '0'),
+      description: 'Drives one browser action with a long parameter list.',
+      signature: 'selector:str, x?:num, y?:num, space?:str, snapshotId?:str, double?:bool, touch?:bool, holdMs?:num',
+    })
+  }
+  for (const budgetTokens of [2000, 400, 60]) {
+    const rendered = buildTieredCatalog(entries, { budgetTokens })
+    assert.equal(rendered.estimatedTokens, estimateTokens(rendered.text))
+  }
+})
+

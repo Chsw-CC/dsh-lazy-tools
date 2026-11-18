@@ -366,6 +366,7 @@ test('list projects signatures once per registry generation', async () => {
   await toolbox.execute({ action: 'list' }, makeExec(undefined))
   const first = globalThis.__projectCalls
   assert.ok(first > 0)
+  assert.equal(first, definitions.length, 'each definition is projected once per generation')
   await toolbox.execute({ action: 'list' }, makeExec(undefined))
   assert.equal(globalThis.__projectCalls, first, 'a repeated listing reuses cached rows and signatures')
 
