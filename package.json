@@ -1,6 +1,6 @@
 {
   "name": "dsh-lazy-tools",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "按需加载工具：核心工具保持原生可见，长尾工具收进一个 toolbox 入口，显著降低每次请求的上下文与 token 占用。",
   "license": "MIT",
   "type": "module",
