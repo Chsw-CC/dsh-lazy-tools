@@ -91,8 +91,10 @@ test('group fallback handles thousands of groups and keeps a callable prefix', (
   assert.equal(rendered.tier, 3)
   assert.equal(rendered.shown, 5000)
   assert.equal(rendered.estimatedTokens, estimateTokens(rendered.text))
-  assert.ok(rendered.estimatedTokens <= 1200 || rendered.text.startsWith('…[+'))
-  assert.ok(rendered.text.endsWith('more groups]'))
+  assert.ok(rendered.estimatedTokens <= 1200)
+  assert.equal(rendered.text.split('\n').length, 266, 'the fallback must retain 265 callable groups')
+  assert.ok(rendered.text.startsWith('- group0000_* (1)\n'))
+  assert.ok(rendered.text.endsWith('\n…[+4735 more groups]'))
 })
 
 
