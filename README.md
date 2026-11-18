@@ -138,11 +138,14 @@ dsh plugin --profile desktop add link:/absolute/path/to/dsh-lazy-tools
 ## 开发
 
 ```bash
-bun test tests/                      # 53 条：目录格式化、签名截断、装配/收窄/分发/自纠错
+bun test tests/                      # 55 条：目录格式化、签名截断、装配/收窄/分发/自纠错
 node scripts/measure-first-call.mjs # 40 工具模拟 profile 的 token 实测
+node scripts/bench-catalog.mjs      # 目录渲染 CPU 基准（信息输出，不做门禁）
 ```
 
 `lib/catalog.js` 是零依赖纯函数（格式化与预算规则），`lib/index.js` 只负责服务接线。
+目录渲染在 105 工具、默认 1200 预算下约 0.17 ms/次（0.4.0 约 0.73 ms），
+40 工具约 0.05 ms/次；这是 CPU 开销，输出与 0.4.0 逐字节一致，token 数不变。
 CI 在 push 到 `main` 和每个 PR 上跑语法检查、测试与测量。
 
 MIT

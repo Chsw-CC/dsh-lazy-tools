@@ -1,6 +1,6 @@
 {
   "name": "dsh-lazy-tools",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "按需加载工具：核心工具保持原生可见，长尾工具收进一个 toolbox 入口，显著降低每次请求的上下文与 token 占用。",
   "license": "MIT",
   "type": "module",
@@ -33,7 +33,8 @@
   "scripts": {
     "test": "bun test tests/",
     "check": "node --check lib/index.js && bun test tests/",
-    "measure": "node scripts/measure-first-call.mjs"
+    "measure": "node scripts/measure-first-call.mjs",
+    "bench": "node scripts/bench-catalog.mjs"
   },
   "dsh": {
     "bundle": {

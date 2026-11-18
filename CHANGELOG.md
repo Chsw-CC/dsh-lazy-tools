@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.1
+
+Performance-only release: the rendered text, tier choice, and token count are unchanged.
+The listing path was spending most of its CPU on repeated work after 0.4.0 added the
+signature-clipping tiers.
+
+- **Token estimation is a code-unit loop instead of a regex per character.** An 8k ASCII
+  sample drops from roughly 229 µs to 23 µs (~10×); CJK, Hangul and surrogate pairs keep
+  the same count.
+- **A tier is measured once, not twice.** The accepted render passes its measured token
+  count to `finish`, and the skills budget reuses `tools.estimatedTokens` instead of
+  re-scanning the tool text.
+- **Queries filter before summarising.** A narrow `list` no longer clips the description
+  of every rejected entry.
+- **Signature clipping is linear.** Both the signature builder and the clip loop keep a
+  running length instead of joining a growing array for every parameter.
+
+On the 105-tool shape, `buildTieredCatalog` at the default 1200-token budget falls from
+about 728 µs to 169–182 µs (≈4×); the 40-tool shape falls from about 206 µs to 52–57 µs
+(≈4×). A differential check over three profiles and ten budgets produced byte-identical
+text and identical token counts. The 40-tool measurement stays at 672 rendered tokens
+(tier 2), `read` query 213, single schema 205, and Chinese `读取` 294.
+
+Tests 53 -> 55.
+
 ## 0.4.0
 
 A listing exists to be called from. Version 0.3.x degraded a large catalog straight
