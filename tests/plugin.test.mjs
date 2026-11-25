@@ -200,7 +200,7 @@ test('call dispatches a deferred tool with the parent token', async () => {
   assert.equal(prepared.length, 1)
   assert.equal(prepared[0].name, 'read')
   assert.equal(prepared[0].parent, 'toolbox-token')
-  assert.equal(prepared[0].arguments, JSON.stringify({ path: 'a' }))
+  assert.deepEqual(prepared[0].arguments, { path: 'a' })
   assert.equal(prepared[0].agent, exec.agent)
 })
 
@@ -287,7 +287,7 @@ test('call accepts an argument object sent as a JSON string', async () => {
   )
   assert.equal(result.ok, true)
   assert.equal(prepared[0].name, 'read', 'surrounding whitespace does not change the tool')
-  assert.equal(prepared[0].arguments, JSON.stringify({ path: 'a' }), 'the JSON string is parsed into the declared object')
+  assert.deepEqual(prepared[0].arguments, { path: 'a' }, 'the JSON string is parsed into the declared object')
 })
 
 test('an oversized schema answer stays parseable and names what did not fit', async () => {
