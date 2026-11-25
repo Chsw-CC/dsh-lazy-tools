@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Pass parsed arguments to nested tools as a JSON value.** The `call` path parsed a JSON-string argument object and then re-serialised it, so tools validated a string against an object schema and failed with `invalid arguments: arguments must be an object`. The parsed object is now forwarded unchanged; both object and JSON-string inputs work.
+- **Regression coverage** now checks that `prepare` receives the parsed object in both cases.
+
 ## 0.4.2
 
 Reliability fix for the last-resort prefix-group tier. Rendering was correct, but the
